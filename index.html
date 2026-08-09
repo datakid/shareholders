@@ -259,7 +259,21 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease),
 .table-wrap{position:relative; overflow:auto; border-radius:var(--r2); border:1px solid var(--line)}
 .table-wrap.h-md{max-height:520px}
 .table-wrap.h-lg{max-height:640px}
+.table-wrap::-webkit-scrollbar{height:9px; width:9px}
+.table-wrap::-webkit-scrollbar-track{background:transparent}
+.table-wrap::-webkit-scrollbar-thumb{background:var(--line-2); border-radius:99px; border:2px solid var(--surface)}
+.table-wrap:hover::-webkit-scrollbar-thumb{background:var(--ink-4)}
+.table-wrap{scrollbar-width:thin; scrollbar-color:var(--line-2) transparent}
+.scroll-shadow{position:absolute; inset-block:0; width:28px; pointer-events:none; opacity:0; transition:opacity var(--d2) var(--ease); z-index:5}
+.scroll-shadow-start{inset-inline-start:0; background:linear-gradient(to left, var(--surface) 0%, transparent 100%)}
+.scroll-shadow-end{inset-inline-end:0; background:linear-gradient(to right, var(--surface) 0%, transparent 100%)}
+.table-wrap.can-scroll-start .scroll-shadow-start{opacity:1}
+.table-wrap.can-scroll-end .scroll-shadow-end{opacity:1}
 table.dt{width:100%; border-collapse:separate; border-spacing:0; font-size:var(--t-md); background:var(--surface)}
+table.dt thead th:first-child{inset-inline-start:0; z-index:3}
+table.dt tbody td:first-child{position:sticky; inset-inline-start:0; z-index:1; background:var(--surface)}
+table.dt tbody tr:hover td:first-child{background:var(--surface-2)}
+table.dt tfoot td:first-child{position:sticky; inset-inline-start:0; z-index:2}
 table.dt thead th{
 position:sticky; top:0; z-index:2; background:var(--surface-2); color:var(--ink-3);
 font-size:var(--t-xs); font-weight:600; letter-spacing:.055em; text-transform:uppercase;
@@ -1071,6 +1085,29 @@ var Fmt = (function () {
     var d = digits == null ? 2 : digits;
     return (value * 100).toFixed(d) + '%';
   }
+  function trimTrailingZeros(s) {
+    if (s.indexOf('.') === -1) return s;
+    return s.replace(/0+$/, '').replace(/\.$/, '');
+  }
+  function pctExact(value) {
+    if (value == null || !isFinite(value)) return '—';
+    return trimTrailingZeros((value * 100).toFixed(6)) + '%';
+  }
+  function pctValue(value) {
+    if (value == null || !isFinite(value)) return '';
+    return trimTrailingZeros((value * 100).toFixed(6));
+  }
+  function groupDigits(value) {
+    var n = typeof value === 'number' ? value : parseNumber(value);
+    if (n == null || !isFinite(n)) return '';
+    var neg = n < 0;
+    var abs = Math.abs(n);
+    var fixed = abs.toFixed(2);
+    if (fixed.slice(-3) === '.00') fixed = fixed.slice(0, -3);
+    var parts = fixed.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (neg ? '-' : '') + parts.join('.');
+  }
   function splitMoney(value) {
     var v = (value == null || !isFinite(value)) ? 0 : value;
     var neg = v < 0;
@@ -1110,7 +1147,7 @@ var Fmt = (function () {
     if (!s) return false;
     return ['1', 'true', 'yes', 'y', 'نعم', 'صح', 'مستبعد', 'مقفول', 'x', 'v'].indexOf(s) !== -1;
   }
-  return { egp: egp, piastres: piastres, int: int, pct: pct, splitMoney: splitMoney, isoDate: isoDate, fileStamp: fileStamp, humanTime: humanTime, parseNumber: parseNumber, parseBool: parseBool };
+  return { egp: egp, piastres: piastres, int: int, pct: pct, pctExact: pctExact, pctValue: pctValue, groupDigits: groupDigits, splitMoney: splitMoney, isoDate: isoDate, fileStamp: fileStamp, humanTime: humanTime, parseNumber: parseNumber, parseBool: parseBool };
 })();
 
 var Icons = (function () {
@@ -1570,8 +1607,9 @@ var UI = (function () {
     opts = opts || {};
     var i = el('input', 'input' + (opts.size === 'sm' ? ' input-sm' : '') + (opts.numeric ? ' num-input' : '') + (opts.cls ? ' ' + opts.cls : ''));
     i.id = opts.id || nextId('in');
-    i.type = opts.type || 'text';
-    if (opts.value != null) i.value = opts.value;
+    i.type = opts.grouped ? 'text' : (opts.type || 'text');
+    if (opts.grouped) i.setAttribute('inputmode', 'decimal');
+    if (opts.value != null) i.value = opts.grouped ? Fmt.groupDigits(opts.value) : opts.value;
     if (opts.placeholder) i.placeholder = opts.placeholder;
     if (opts.min != null) i.min = String(opts.min);
     if (opts.max != null) i.max = String(opts.max);
@@ -1581,6 +1619,16 @@ var UI = (function () {
     if (opts.onInput) i.addEventListener('input', function () { opts.onInput(i.value, i); });
     if (opts.onChange) i.addEventListener('change', function () { opts.onChange(i.value, i); });
     if (opts.onKeyDown) i.addEventListener('keydown', opts.onKeyDown);
+    if (opts.grouped) {
+      i.addEventListener('focus', function () {
+        var raw = Fmt.parseNumber(i.value);
+        i.value = raw == null ? '' : String(raw);
+      });
+      i.addEventListener('blur', function () {
+        var raw = Fmt.parseNumber(i.value);
+        i.value = Fmt.groupDigits(raw == null ? 0 : raw);
+      });
+    }
     return i;
   }
 
@@ -2207,7 +2255,7 @@ var Reports = (function () {
       rows.push([
         'مجمع: ' + p.name,
         'مُدخل ' + Fmt.egp(p.gross) + ' → بعد التقريب ' + Fmt.egp(p.effectiveGross) +
-        ' | خصم ' + Fmt.pct(p.taxRate, 2) + ' | صافي ' + Fmt.egp(p.net) +
+        ' | خصم ' + Fmt.pctExact(p.taxRate) + ' | صافي ' + Fmt.egp(p.net) +
         ' | أعضاء ' + Fmt.int(p.members) + (p.rounded ? ' | تم تعديل الإجمالي للتقريب' : '') + (p.zeroBudget ? ' | بلا مبلغ' : '')
       ]);
     });
@@ -2408,6 +2456,133 @@ var Exporter = (function () {
 
     addSheet(wb, used, 'المنهجية', [['البند', 'التفصيل']].concat(Reports.methodologyRows(state, result)), { widths: [26, 100], autofilter: false });
 
+    Object.keys(state.pools || {}).forEach(function (poolName) {
+      addPoolSheet(wb, used, state, result, poolName);
+    });
+
+    return wb;
+  }
+
+  function poolDetailRows(state, result, poolName) {
+    return Reports.detailRows(state, result).filter(function (r) { return r.pool === poolName; });
+  }
+
+  function addPoolSheet(wb, used, state, result, poolName) {
+    var rows = poolDetailRows(state, result, poolName);
+    if (rows.length === 0) return;
+    var hdr = ['#', 'الاسم', 'القسم', 'الفئة', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مقفول على', 'مستبعد', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
+    var body = rows.map(function (r) {
+      return [r.id, r.name, r.dept, r.tier, r.weight, r.days, r.penalty, r.manual,
+        r.override == null ? '' : r.override, r.pinned, r.excluded ? 'نعم' : '',
+        r.gross, r.tax, r.net, r.ideal, r.drift, r.special ? 'نعم' : '', r.reason, r.notes];
+    });
+    var totalRow = ['الإجمالي', '', '', '', '', '', '', '', '', '', '',
+      Math.round(body.reduce(function (s, r) { return s + r[11]; }, 0) * 100) / 100,
+      Math.round(body.reduce(function (s, r) { return s + r[12]; }, 0) * 100) / 100,
+      Math.round(body.reduce(function (s, r) { return s + r[13]; }, 0) * 100) / 100, '', '', '', '', ''];
+    addSheet(wb, used, poolName, [hdr].concat(body).concat([totalRow]), {
+      formats: { 0: INT, 4: M4, 5: INT, 6: PCT, 7: M4, 8: M2, 11: M2, 12: M2, 13: M2, 14: M2, 15: M2 }
+    });
+  }
+
+  function buildSelectedReport(state, result, meta, selectedKeys) {
+    var wb = newWorkbook();
+    var used = Object.create(null);
+    var want = function (key) { return selectedKeys.indexOf(key) !== -1; };
+
+    if (want('exec')) {
+      var exec = Reports.executiveRows(state, result);
+      var execRows = [['البيان', 'القيمة']];
+      exec.forEach(function (r) { execRows.push([r.label, r.value]); });
+      execRows.push([]);
+      execRows.push(['التقرير أُنتج في', Fmt.humanTime(meta.at)]);
+      execRows.push(['إصدار التطبيق', meta.version]);
+      execRows.push(['نطاق التقرير', 'كل الأشخاص في الملف — لا تتأثر أرقام هذا التقرير بأي بحث أو فلتر على الشاشة']);
+      addSheet(wb, used, 'الملخص التنفيذي', execRows, { widths: [42, 22], autofilter: false, formats: { 1: M2 } });
+    }
+
+    if (want('pools')) {
+      var poolsHdr = ['المجمع', 'الإجمالي المُدخل', 'الإجمالي بعد التقريب', 'نسبة الخصم', 'الصافي', 'عدد الأعضاء', 'الوزن المستهدف', 'الوزن الفعلي', 'الانحراف', 'ملاحظة'];
+      var poolBody = Reports.poolRows(state, result).map(function (p) {
+        return [p.name, p.gross, p.effectiveGross, p.taxRate, p.net, p.members, p.targetWeight, p.actualWeight,
+          p.deviation == null ? '' : p.deviation,
+          (p.zeroBudget ? 'بلا مبلغ — الأعضاء المثبّتون لن يحصلوا على شيء' : '') + (p.rounded ? (p.zeroBudget ? ' | ' : '') + 'تم تعديل الإجمالي للتقريب' : '')];
+      });
+      addSheet(wb, used, 'المجمعات', [poolsHdr].concat(poolBody), {
+        formats: { 1: M2, 2: M2, 3: PCT, 4: M2, 5: INT, 6: M4, 7: M4, 8: PCT }
+      });
+    }
+
+    if (want('detail')) {
+      var detHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مقفول على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
+      var detBody = Reports.detailRows(state, result).map(function (r) {
+        return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.days, r.penalty, r.manual,
+          r.override == null ? '' : r.override, r.pinned, r.excluded ? 'نعم' : '', r.unresolvedTier ? 'نعم' : '',
+          r.gross, r.tax, r.net, r.ideal, r.drift, r.special ? 'نعم' : '', r.reason, r.notes];
+      });
+      addSheet(wb, used, 'التفصيل الكامل', [detHdr].concat(detBody), {
+        formats: { 0: INT, 5: M4, 6: INT, 7: PCT, 8: M4, 9: M2, 13: M2, 14: M2, 15: M2, 16: M2, 17: M2 }
+      });
+    }
+
+    if (want('unresolved')) {
+      var unresolved = Reports.unresolvedRows(state, result);
+      if (unresolved.length > 0) {
+        var unHdr = ['#', 'الاسم', 'القسم', 'الفئة المُدخلة', 'الأيام', 'سبب الاستبعاد', 'ملاحظات', 'قرار المستخدم'];
+        var unBody = unresolved.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.days, r.cause, r.notes, '']; });
+        unBody.unshift([]);
+        unBody.unshift(['هؤلاء الأشخاص لم يدخلوا في التوزيع ولم يحصلوا على أي مبلغ. المسؤولية عن مراجعتهم على المستخدم.']);
+        addSheet(wb, used, 'بدون فئة', [unHdr].concat(unBody), { formats: { 0: INT, 4: INT }, autofilter: false });
+      }
+    }
+
+    if (want('special')) {
+      var specials = Reports.specialRows(state, result);
+      if (specials.length > 0) {
+        var spHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الصافي', 'سبب الحالة الخاصة', 'ملاحظات'];
+        var spBody = specials.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.net, r.reason, r.notes]; });
+        addSheet(wb, used, 'الحالات الخاصة', [spHdr].concat(spBody), { formats: { 0: INT, 5: M4, 6: M2 } });
+      }
+    }
+
+    if (want('dept')) {
+      var deptHdr = ['القسم', 'العدد', 'المستحقون', 'مستبعدون', 'بدون فئة', 'مجموع الأوزان', 'الإجمالي', 'الخصم', 'الصافي'];
+      var deptBody = Reports.deptRows(state, result).map(function (d) {
+        return [d.dept, d.count, d.paid, d.excluded, d.unresolved, d.weight, d.gross, d.tax, d.net];
+      });
+      var deptTotal = deptBody.reduce(function (acc, r) {
+        return ['الإجمالي', acc[1] + r[1], acc[2] + r[2], acc[3] + r[3], acc[4] + r[4], acc[5] + r[5], acc[6] + r[6], acc[7] + r[7], acc[8] + r[8]];
+      }, ['الإجمالي', 0, 0, 0, 0, 0, 0, 0, 0]);
+      addSheet(wb, used, 'حسب القسم', [deptHdr].concat(deptBody).concat([deptTotal]), {
+        formats: { 1: INT, 2: INT, 3: INT, 4: INT, 5: M4, 6: M2, 7: M2, 8: M2 }
+      });
+    }
+
+    if (want('tier')) {
+      var tierHdr = ['الفئة', 'القيمة الأساسية', 'العدد', 'مجموع الأوزان', 'الصافي', 'بدون فئة معروفة'];
+      var tierBody = Reports.tierRows(state, result).map(function (t) {
+        return [t.tier, t.base == null ? '' : t.base, t.count, t.weight, t.net, t.unresolved];
+      });
+      addSheet(wb, used, 'حسب الفئة', [tierHdr].concat(tierBody), { formats: { 1: M2, 2: INT, 3: M4, 4: M2, 5: INT } });
+    }
+
+    if (want('warnings')) {
+      var warns = Reports.warningRows(result);
+      if (warns.length > 0) {
+        var wHdr = ['النوع', 'الهدف', 'الرسالة', 'الرمز'];
+        var wBody = warns.map(function (w) { return [w.kind, w.target, w.message, w.code]; });
+        addSheet(wb, used, 'التنبيهات', [wHdr].concat(wBody), { widths: [26, 14, 70, 22] });
+      }
+    }
+
+    if (want('methodology')) {
+      addSheet(wb, used, 'المنهجية', [['البند', 'التفصيل']].concat(Reports.methodologyRows(state, result)), { widths: [26, 100], autofilter: false });
+    }
+
+    Object.keys(state.pools || {}).forEach(function (poolName) {
+      if (want('pool:' + poolName)) addPoolSheet(wb, used, state, result, poolName);
+    });
+
     return wb;
   }
 
@@ -2587,6 +2762,7 @@ var Exporter = (function () {
     buildFullReport: buildFullReport, buildViewExport: buildViewExport, buildTemplate: buildTemplate,
     templateRows: templateRows, detailAoa: detailAoa,
     buildSettingsExport: buildSettingsExport,
+    buildSelectedReport: buildSelectedReport, addPoolSheet: addPoolSheet,
     write: write, writeCsv: writeCsv, toCsv: toCsv, available: available,
     sanitizeSheetName: sanitizeSheetName, newWorkbook: newWorkbook, kindFormat: kindFormat,
     FORMATS: { M2: M2, M4: M4, PCT: PCT, INT: INT }
@@ -2727,9 +2903,9 @@ var App = (function () {
   }
   function defaultPools() {
     return {
-      'طوابع المواليد': { gross: 100000, taxRate: 0.11 },
-      'طوابع اللجان الطبية': { gross: 80000, taxRate: 0.240938 },
-      'نماذج استمارات 111': { gross: 60000, taxRate: 0.240938 }
+      'طوابع المواليد': { gross: 185000, taxRate: 0.11 },
+      'طوابع اللجان الطبية': { gross: 142000, taxRate: 0.240938 },
+      'نماذج استمارات 111': { gross: 97500, taxRate: 0.240938 }
     };
   }
 
@@ -3394,7 +3570,7 @@ var App = (function () {
       nameIn.style.flex = '1 1 180px';
 
       var grossIn = UI.input({
-        value: p.gross, numeric: true, type: 'number', min: 0, step: '0.01', ariaLabel: 'إجمالي ' + name,
+        value: p.gross, numeric: true, grouped: true, min: 0, step: '0.01', ariaLabel: 'إجمالي ' + name,
         onInput: function (v) {
           var n = Fmt.parseNumber(v);
           state.pools[name].gross = n == null ? 0 : n;
@@ -3405,7 +3581,7 @@ var App = (function () {
       grossIn.style.flex = '0 0 160px';
 
       var taxIn = UI.input({
-        value: (p.taxRate * 100).toFixed(2), numeric: true, type: 'number', min: 0, max: 99.99, step: '0.01', ariaLabel: 'نسبة خصم ' + name,
+        value: Fmt.pctValue(p.taxRate), numeric: true, type: 'number', min: 0, max: 99.9999, step: 'any', ariaLabel: 'نسبة خصم ' + name,
         onInput: function (v) {
           var n = Fmt.parseNumber(v);
           var rate = n == null ? 0 : Engine.clamp(n / 100, 0, 0.9999);
@@ -4260,6 +4436,9 @@ var App = (function () {
       maxDrift < 1 ? 'أقل من جنيه — توزيع دقيق' : 'الفرق بين النصيب الفعلي والمثالي',
       maxDrift < 1 ? 'ok' : 'warn', 'chart'));
 
+    grid.appendChild(kpiCard('نصيب النقطة', el('span', 'money money-lg', el('span', 'money-int', Fmt.egp(r.k, 4))),
+      'كل نقطة في وزن الفئة تساوي هذا المبلغ صافيًا هذا الشهر', 'flat', 'layers'));
+
     if (unresolved > 0) {
       grid.appendChild(kpiCard('بدون فئة', el('span', 'money money-lg', el('span', 'money-int', Fmt.int(unresolved))),
         'خارج التوزيع — لم يحصلوا على شيء', 'danger', 'warn'));
@@ -4292,7 +4471,7 @@ var App = (function () {
       if (p.zeroBudget) top.appendChild(UI.badge('بلا مبلغ', 'warn', 'warn'));
       if (p.rounded) top.appendChild(UI.attachTip(UI.badge('عُدّل للتقريب', 'info'), 'الإجمالي المُدخل ' + Fmt.egp(p.gross) + ' عُدّل إلى ' + Fmt.egp(p.effectiveGross) + ' ليكون من مضاعفات وحدة التقريب'));
       top.appendChild(el('div', 'topbar-spacer'));
-      top.appendChild(el('span', 'small muted', Fmt.int(p.members) + ' عضو · خصم ' + Fmt.pct(p.taxRate, 2)));
+      top.appendChild(el('span', 'small muted', Fmt.int(p.members) + ' عضو · خصم ' + Fmt.pctExact(p.taxRate)));
       block.appendChild(top);
 
       var nums = el('div', 'row g4 wrap');
@@ -4916,6 +5095,155 @@ var App = (function () {
     inp.click();
   }
 
+  function customExportDefs(state, result) {
+    var exec = Reports.executiveRows(state, result);
+    var unresolvedCount = exec.__totals.unresolved;
+    var specials = Reports.specialRows(state, result);
+    var warns = Reports.warningRows(result);
+    var defs = [
+      { key: 'exec', label: 'الملخص التنفيذي', hint: 'أهم الأرقام في صفحة واحدة' },
+      { key: 'pools', label: 'المجمعات', hint: 'ملخص كل مجمع: الإجمالي والصافي وعدد الأعضاء' },
+      { key: 'detail', label: 'التفصيل الكامل', hint: Fmt.int((state.people || []).length) + ' شخص بكل الأعمدة' },
+      { key: 'dept', label: 'حسب القسم', hint: 'مجموع لكل قسم' },
+      { key: 'tier', label: 'حسب الفئة', hint: 'مجموع لكل فئة' },
+      { key: 'methodology', label: 'المنهجية', hint: 'شرح طريقة الحساب والتقريب' }
+    ];
+    if (unresolvedCount > 0) defs.push({ key: 'unresolved', label: 'بدون فئة', hint: Fmt.int(unresolvedCount) + ' شخص خارج التوزيع' });
+    if (specials.length > 0) defs.push({ key: 'special', label: 'الحالات الخاصة', hint: Fmt.int(specials.length) + ' حالة' });
+    if (warns.length > 0) defs.push({ key: 'warnings', label: 'التنبيهات', hint: Fmt.int(warns.length) + ' تنبيه' });
+    Reports.poolRows(state, result).forEach(function (p) {
+      if (p.members > 0) defs.push({ key: 'pool:' + p.name, label: p.name, hint: Fmt.int(p.members) + ' مستحق — ورقة مستقلة لهذا المجمع', group: 'pool' });
+    });
+    return defs;
+  }
+
+  function openCustomExportModal() {
+    if (!guardXlsx()) return;
+    var defs = customExportDefs(state, state.result);
+    var selected = {};
+    defs.forEach(function (d) { selected[d.key] = true; });
+    var fileMode = 'single';
+
+    var m = UI.modal({ title: 'تصدير مخصّص', subtitle: 'اختر أي الأوراق تريد، وكيف تريدها', wide: true });
+
+    var mainDefs = defs.filter(function (d) { return d.group !== 'pool'; });
+    var poolDefs = defs.filter(function (d) { return d.group === 'pool'; });
+
+    var list = el('div', 'stack g2');
+    mainDefs.forEach(function (d) {
+      var row = el('div', 'stack g1');
+      row.appendChild(UI.checkbox({
+        label: d.label, checked: selected[d.key],
+        onChange: function (v) { selected[d.key] = v; refresh(); }
+      }));
+      var hint = el('div', 'field-help', d.hint);
+      hint.style.marginInlineStart = '26px';
+      row.appendChild(hint);
+      list.appendChild(row);
+    });
+    m.body.appendChild(list);
+
+    if (poolDefs.length > 0) {
+      m.body.appendChild(el('div', 'divider'));
+      m.body.appendChild(el('div', 'field-label', 'ورقة مستقلة لكل مجمع'));
+      var poolList = el('div', 'stack g2');
+      poolList.style.marginTop = 'var(--s2)';
+      poolDefs.forEach(function (d) {
+        var row = el('div', 'stack g1');
+        row.appendChild(UI.checkbox({
+          label: d.label, checked: selected[d.key],
+          onChange: function (v) { selected[d.key] = v; refresh(); }
+        }));
+        var hint = el('div', 'field-help', d.hint);
+        hint.style.marginInlineStart = '26px';
+        row.appendChild(hint);
+        poolList.appendChild(row);
+      });
+      m.body.appendChild(poolList);
+    }
+
+    m.body.appendChild(el('div', 'divider'));
+    m.body.appendChild(el('div', 'field-label', 'صيغة التنزيل'));
+    var modeList = el('div', 'stack g2');
+    modeList.style.marginTop = 'var(--s2)';
+    [
+      { v: 'single', label: 'ملف واحد بكل الأوراق المختارة', hint: 'أسرع وأسهل في المشاركة — ملف Excel واحد بكل الأوراق كصفحات منفصلة' },
+      { v: 'perFile', label: 'ملف Excel منفصل لكل ورقة', hint: 'تنزيل عدة ملفات دفعة واحدة، كل ورقة في ملفها الخاص' }
+    ].forEach(function (o) {
+      var row = el('label', 'check');
+      var r = el('input');
+      r.type = 'radio';
+      r.name = 'export-mode';
+      r.checked = fileMode === o.v;
+      r.addEventListener('change', function () { if (r.checked) fileMode = o.v; });
+      var box = el('span', 'check-box');
+      box.style.borderRadius = '50%';
+      box.appendChild(Icons.svg('check'));
+      row.appendChild(r);
+      row.appendChild(box);
+      var txt = el('div', 'stack');
+      txt.appendChild(el('span', null, o.label));
+      txt.appendChild(el('span', 'field-help', o.hint));
+      row.appendChild(txt);
+      modeList.appendChild(row);
+    });
+    m.body.appendChild(modeList);
+
+    var summary = el('div', 'notice notice-accent');
+    summary.setAttribute('aria-live', 'polite');
+    var summaryText = el('div');
+    summary.appendChild(Icons.svg('info', 'notice-icon'));
+    summary.appendChild(el('div', 'notice-body', summaryText));
+    m.body.appendChild(summary);
+
+    var exportBtn;
+    function refresh() {
+      var count = Object.keys(selected).filter(function (k) { return selected[k]; }).length;
+      clearNode(summaryText);
+      summaryText.appendChild(document.createTextNode(
+        count === 0 ? 'اختر ورقة واحدة على الأقل' : Fmt.int(count) + ' ورقة مختارة'
+      ));
+      if (exportBtn) exportBtn.disabled = count === 0;
+    }
+
+    exportBtn = btn('تصدير', {
+      variant: 'primary', icon: 'download',
+      onClick: function () {
+        var keys = Object.keys(selected).filter(function (k) { return selected[k]; });
+        if (keys.length === 0) return;
+        var stamp = Fmt.isoDate(Date.now());
+        var base = (state.title || APP_NAME) + ' - ' + stamp;
+        var meta = { at: Date.now(), version: APP_VERSION };
+        try {
+          if (fileMode === 'single') {
+            var wb = Exporter.buildSelectedReport(state, state.result, meta, keys);
+            if (!wb.SheetNames || wb.SheetNames.length === 0) { UI.toast('لا توجد بيانات في الأوراق المختارة', 'warn'); return; }
+            Exporter.write(wb, base + '.xlsx');
+          } else {
+            var written = 0;
+            keys.forEach(function (key, i) {
+              setTimeout(function () {
+                var wbOne = Exporter.buildSelectedReport(state, state.result, meta, [key]);
+                if (!wbOne.SheetNames || wbOne.SheetNames.length === 0) return;
+                var label = defs.find(function (d) { return d.key === key; });
+                Exporter.write(wbOne, base + ' - ' + (label ? label.label : key) + '.xlsx');
+                written++;
+              }, i * 180);
+            });
+          }
+          m.close();
+          UI.toast('تم تنزيل ' + Fmt.int(keys.length) + ' ' + (keys.length === 1 ? 'ورقة' : 'ورقة'), 'ok');
+        } catch (e) {
+          UI.toast('تعذّر إنشاء الملف: ' + (e && e.message ? e.message : 'خطأ غير معروف'), 'danger');
+        }
+      }
+    });
+    m.foot.appendChild(btn('إلغاء', { variant: 'ghost', onClick: m.close }));
+    m.foot.appendChild(exportBtn);
+    refresh();
+    return m;
+  }
+
   function screenExport() {
     var wrap = el('div');
     wrap.appendChild(pageHead('مركز التصدير', 'التقرير الكامل يشمل كل الأشخاص دائمًا. تصدير العرض يعطيك ما تراه على الشاشة بنفس الترتيب والفلاتر — الاثنان مختلفان بقصد، وكل ملف يقول عن نفسه أي نوع هو.'));
@@ -4942,9 +5270,16 @@ var App = (function () {
 
     grid.appendChild(exportCard({
       icon: 'file', title: 'التقرير الكامل', tone: 'primary',
-      desc: 'كل الأشخاص (' + Fmt.int(rows.length) + ') مع المجمعات والأقسام والفئات والحالات الخاصة والتنبيهات والمنهجية.',
-      sheets: ['الملخص التنفيذي', 'المجمعات', 'التفصيل الكامل', unresolved ? 'بدون فئة' : null, 'الحالات الخاصة', 'حسب القسم', 'حسب الفئة', 'التنبيهات', 'المنهجية'].filter(Boolean),
+      desc: 'كل الأشخاص (' + Fmt.int(rows.length) + ') مع المجمعات والأقسام والفئات والحالات الخاصة والتنبيهات والمنهجية، وورقة مستقلة لكل مجمع.',
+      sheets: ['الملخص التنفيذي', 'المجمعات', 'التفصيل الكامل', unresolved ? 'بدون فئة' : null, 'الحالات الخاصة', 'حسب القسم', 'حسب الفئة', 'التنبيهات', 'المنهجية'].concat(Object.keys(state.pools || {})).filter(Boolean),
       action: btn('تنزيل التقرير الكامل', { variant: 'primary', icon: 'download', block: true, onClick: exportFullReport })
+    }));
+
+    grid.appendChild(exportCard({
+      icon: 'sliders', title: 'تصدير مخصّص',
+      desc: 'اختر بالضبط أي الأوراق تريدها من التقرير — بما فيها ورقة كل مجمع على حدة — وحمّلها في ملف واحد أو كل ورقة في ملفها.',
+      sheets: null,
+      action: btn('اختيار الأوراق وتصدير', { icon: 'sliders', block: true, onClick: openCustomExportModal })
     }));
 
     grid.appendChild(exportCard({
@@ -5243,7 +5578,7 @@ var App = (function () {
       var left = el('div');
       left.appendChild(el('div', 'setting-name', name));
       left.appendChild(el('div', 'setting-desc',
-        'إجمالي ' + Fmt.egp(p.gross) + ' · خصم ' + Fmt.pct(p.taxRate, 2) + ' · صافي ' + Fmt.egp(p.gross * (1 - p.taxRate)) +
+        'إجمالي ' + Fmt.egp(p.gross) + ' · خصم ' + Fmt.pctExact(p.taxRate) + ' · صافي ' + Fmt.egp(p.gross * (1 - p.taxRate)) +
         (pinned ? ' · ' + Fmt.int(pinned) + ' مقفول' : '')));
       row.appendChild(left);
       row.appendChild(btn('تعديل', {
@@ -6044,6 +6379,61 @@ var SelfTest = (function () {
   }
 
   return { run: run, renderInto: renderInto };
+})();
+</script>
+<script>
+(function () {
+  'use strict';
+
+  function updateShadowClasses(tw) {
+    var maxScroll = tw.scrollWidth - tw.clientWidth;
+    if (maxScroll <= 1) {
+      tw.classList.remove('can-scroll-start', 'can-scroll-end');
+      return;
+    }
+    var pos = Math.abs(tw.scrollLeft);
+    tw.classList.toggle('can-scroll-start', pos > 2);
+    tw.classList.toggle('can-scroll-end', pos < maxScroll - 2);
+  }
+
+  function enhance(tw) {
+    if (tw.__scrollShadowBound) { updateShadowClasses(tw); return; }
+    tw.__scrollShadowBound = true;
+    var startEl = document.createElement('div');
+    startEl.className = 'scroll-shadow scroll-shadow-start';
+    startEl.setAttribute('aria-hidden', 'true');
+    var endEl = document.createElement('div');
+    endEl.className = 'scroll-shadow scroll-shadow-end';
+    endEl.setAttribute('aria-hidden', 'true');
+    tw.appendChild(startEl);
+    tw.appendChild(endEl);
+    tw.addEventListener('scroll', function () { updateShadowClasses(tw); }, { passive: true });
+    updateShadowClasses(tw);
+  }
+
+  function scan(root) {
+    var wraps = (root || document).querySelectorAll('.table-wrap');
+    for (var i = 0; i < wraps.length; i++) enhance(wraps[i]);
+  }
+
+  var pending = false;
+  function scheduleScan() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function () { pending = false; scan(); });
+  }
+
+  var appRoot = document.getElementById('app');
+  if (appRoot && typeof MutationObserver !== 'undefined') {
+    var mo = new MutationObserver(scheduleScan);
+    mo.observe(appRoot, { childList: true, subtree: true });
+  }
+  window.addEventListener('resize', function () {
+    var wraps = document.querySelectorAll('.table-wrap');
+    for (var i = 0; i < wraps.length; i++) updateShadowClasses(wraps[i]);
+  }, { passive: true });
+
+  scheduleScan();
 })();
 </script>
 <script>
