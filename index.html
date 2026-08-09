@@ -70,6 +70,13 @@ background:rgba(250,249,245,.82); border-bottom:1px solid var(--line);
 .brand-tag{font-size:var(--t-xs); color:var(--ink-3); line-height:1.2}
 .topbar-spacer{flex:1 1 auto}
 .topbar-actions{display:flex; align-items:center; gap:var(--s2)}
+.topbar-link{
+display:inline-flex; align-items:center; gap:5px; font-size:var(--t-xs); font-weight:600;
+color:var(--ink-4); text-decoration:none; padding:6px 10px; border-radius:var(--r2);
+transition:color var(--d2) var(--ease), background-color var(--d2) var(--ease);
+}
+.topbar-link:hover,.topbar-link:focus-visible{color:var(--accent); background:var(--surface-2)}
+.topbar-link .icon-ext{width:11px; height:11px; transform:rotate(45deg); flex:none}
 
 .stepper{display:flex; align-items:center; gap:var(--s1); padding:var(--s1); background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-pill)}
 .step-pill{
@@ -3106,6 +3113,17 @@ var App = (function () {
     inner.appendChild(el('div', 'topbar-spacer'));
 
     var actions = el('div', 'topbar-actions');
+    var mizanLink = document.createElement('a');
+    mizanLink.className = 'topbar-link';
+    mizanLink.href = 'https://m-izan.vercel.app/';
+    mizanLink.target = '_blank';
+    mizanLink.rel = 'noopener noreferrer';
+    mizanLink.setAttribute('aria-label', 'ميزان — أداة أخرى، يفتح في تبويب جديد');
+    mizanLink.appendChild(document.createTextNode('ميزان'));
+    var extIcon = Icons.svg('arrowUp');
+    extIcon.classList.add('icon-ext');
+    mizanLink.appendChild(extIcon);
+    actions.appendChild(mizanLink);
     actions.appendChild(btn('الإعدادات', { icon: 'settings', variant: 'ghost', size: 'sm', onClick: openSettings }));
     inner.appendChild(actions);
     bar.appendChild(inner);
@@ -5178,7 +5196,7 @@ var App = (function () {
             });
           }
           m.close();
-          UI.toast('تم تنزيل ' + Fmt.int(keys.length) + ' ' + (keys.length === 1 ? 'ورقة' : 'ورقة'), 'ok');
+          UI.toast('تم تنزيل ' + Fmt.int(keys.length) + ' ورقة', 'ok');
         } catch (e) {
           UI.toast('تعذّر إنشاء الملف: ' + (e && e.message ? e.message : 'خطأ غير معروف'), 'danger');
         }
