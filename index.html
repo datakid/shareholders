@@ -2376,10 +2376,7 @@ var Exporter = (function () {
     return kind === 'money' ? M2 : (kind === 'rate' ? M4 : INT);
   }
 
-  function buildFullReport(state, result, meta) {
-    var wb = newWorkbook();
-    var used = Object.create(null);
-
+  function sheetExec(wb, used, state, result, meta) {
     var exec = Reports.executiveRows(state, result);
     var execRows = [['البيان', 'القيمة']];
     exec.forEach(function (r) { execRows.push([r.label, r.value]); });
@@ -2393,7 +2390,9 @@ var Exporter = (function () {
       execRows.push(['تنبيه مسؤولية', 'يوجد ' + unresolvedCount + ' شخص بدون فئة معروفة. تم استبعادهم من التوزيع ولم يحصلوا على أي مبلغ. راجع ورقة "بدون فئة" وقرّر إما تعريف فئتهم أو استبعادهم رسميًا.']);
     }
     addSheet(wb, used, 'الملخص التنفيذي', execRows, { widths: [42, 22], autofilter: false, formats: { 1: M2 } });
+  }
 
+  function sheetPools(wb, used, state, result) {
     var poolsHdr = ['المجمع', 'الإجمالي المُدخل', 'الإجمالي بعد التقريب', 'نسبة الخصم', 'الصافي', 'عدد الأعضاء', 'الوزن المستهدف', 'الوزن الفعلي', 'الانحراف', 'ملاحظة'];
     var poolBody = Reports.poolRows(state, result).map(function (p) {
       return [p.name, p.gross, p.effectiveGross, p.taxRate, p.net, p.members, p.targetWeight, p.actualWeight,
@@ -2403,7 +2402,9 @@ var Exporter = (function () {
     addSheet(wb, used, 'المجمعات', [poolsHdr].concat(poolBody), {
       formats: { 1: M2, 2: M2, 3: PCT, 4: M2, 5: INT, 6: M4, 7: M4, 8: PCT }
     });
+  }
 
+  function sheetDetail(wb, used, state, result) {
     var detHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مقفول على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
     var detBody = Reports.detailRows(state, result).map(function (r) {
       return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.days, r.penalty, r.manual,
@@ -2413,23 +2414,27 @@ var Exporter = (function () {
     addSheet(wb, used, 'التفصيل الكامل', [detHdr].concat(detBody), {
       formats: { 0: INT, 5: M4, 6: INT, 7: PCT, 8: M4, 9: M2, 13: M2, 14: M2, 15: M2, 16: M2, 17: M2 }
     });
+  }
 
+  function sheetUnresolved(wb, used, state, result) {
     var unresolved = Reports.unresolvedRows(state, result);
-    if (unresolved.length > 0) {
-      var unHdr = ['#', 'الاسم', 'القسم', 'الفئة المُدخلة', 'الأيام', 'سبب الاستبعاد', 'ملاحظات', 'قرار المستخدم'];
-      var unBody = unresolved.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.days, r.cause, r.notes, '']; });
-      unBody.unshift([]);
-      unBody.unshift(['هؤلاء الأشخاص لم يدخلوا في التوزيع ولم يحصلوا على أي مبلغ. المسؤولية عن مراجعتهم على المستخدم.']);
-      addSheet(wb, used, 'بدون فئة', [unHdr].concat(unBody), { formats: { 0: INT, 4: INT }, autofilter: false });
-    }
+    if (unresolved.length === 0) return;
+    var unHdr = ['#', 'الاسم', 'القسم', 'الفئة المُدخلة', 'الأيام', 'سبب الاستبعاد', 'ملاحظات', 'قرار المستخدم'];
+    var unBody = unresolved.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.days, r.cause, r.notes, '']; });
+    unBody.unshift([]);
+    unBody.unshift(['هؤلاء الأشخاص لم يدخلوا في التوزيع ولم يحصلوا على أي مبلغ. المسؤولية عن مراجعتهم على المستخدم.']);
+    addSheet(wb, used, 'بدون فئة', [unHdr].concat(unBody), { formats: { 0: INT, 4: INT }, autofilter: false });
+  }
 
+  function sheetSpecial(wb, used, state, result) {
     var specials = Reports.specialRows(state, result);
-    if (specials.length > 0) {
-      var spHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الصافي', 'سبب الحالة الخاصة', 'ملاحظات'];
-      var spBody = specials.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.net, r.reason, r.notes]; });
-      addSheet(wb, used, 'الحالات الخاصة', [spHdr].concat(spBody), { formats: { 0: INT, 5: M4, 6: M2 } });
-    }
+    if (specials.length === 0) return;
+    var spHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الصافي', 'سبب الحالة الخاصة', 'ملاحظات'];
+    var spBody = specials.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.net, r.reason, r.notes]; });
+    addSheet(wb, used, 'الحالات الخاصة', [spHdr].concat(spBody), { formats: { 0: INT, 5: M4, 6: M2 } });
+  }
 
+  function sheetDept(wb, used, state, result) {
     var deptHdr = ['القسم', 'العدد', 'المستحقون', 'مستبعدون', 'بدون فئة', 'مجموع الأوزان', 'الإجمالي', 'الخصم', 'الصافي'];
     var deptBody = Reports.deptRows(state, result).map(function (d) {
       return [d.dept, d.count, d.paid, d.excluded, d.unresolved, d.weight, d.gross, d.tax, d.net];
@@ -2440,26 +2445,56 @@ var Exporter = (function () {
     addSheet(wb, used, 'حسب القسم', [deptHdr].concat(deptBody).concat([deptTotal]), {
       formats: { 1: INT, 2: INT, 3: INT, 4: INT, 5: M4, 6: M2, 7: M2, 8: M2 }
     });
+  }
 
+  function sheetTier(wb, used, state, result) {
     var tierHdr = ['الفئة', 'القيمة الأساسية', 'العدد', 'مجموع الأوزان', 'الصافي', 'بدون فئة معروفة'];
     var tierBody = Reports.tierRows(state, result).map(function (t) {
       return [t.tier, t.base == null ? '' : t.base, t.count, t.weight, t.net, t.unresolved];
     });
     addSheet(wb, used, 'حسب الفئة', [tierHdr].concat(tierBody), { formats: { 1: M2, 2: INT, 3: M4, 4: M2, 5: INT } });
+  }
 
+  function sheetWarnings(wb, used, state, result) {
     var warns = Reports.warningRows(result);
-    if (warns.length > 0) {
-      var wHdr = ['النوع', 'الهدف', 'الرسالة', 'الرمز'];
-      var wBody = warns.map(function (w) { return [w.kind, w.target, w.message, w.code]; });
-      addSheet(wb, used, 'التنبيهات', [wHdr].concat(wBody), { widths: [26, 14, 70, 22] });
-    }
+    if (warns.length === 0) return;
+    var wHdr = ['النوع', 'الهدف', 'الرسالة', 'الرمز'];
+    var wBody = warns.map(function (w) { return [w.kind, w.target, w.message, w.code]; });
+    addSheet(wb, used, 'التنبيهات', [wHdr].concat(wBody), { widths: [26, 14, 70, 22] });
+  }
 
+  function sheetMethodology(wb, used, state, result) {
     addSheet(wb, used, 'المنهجية', [['البند', 'التفصيل']].concat(Reports.methodologyRows(state, result)), { widths: [26, 100], autofilter: false });
+  }
 
+  var BASE_SHEET_BUILDERS = [
+    { key: 'exec', label: 'الملخص التنفيذي', run: sheetExec },
+    { key: 'pools', label: 'المجمعات', run: sheetPools },
+    { key: 'detail', label: 'التفصيل الكامل', run: sheetDetail },
+    { key: 'unresolved', label: 'بدون فئة', run: sheetUnresolved },
+    { key: 'special', label: 'الحالات الخاصة', run: sheetSpecial },
+    { key: 'dept', label: 'حسب القسم', run: sheetDept },
+    { key: 'tier', label: 'حسب الفئة', run: sheetTier },
+    { key: 'warnings', label: 'التنبيهات', run: sheetWarnings },
+    { key: 'methodology', label: 'المنهجية', run: sheetMethodology }
+  ];
+
+  function sheetRegistry(state) {
+    var registry = BASE_SHEET_BUILDERS.slice();
     Object.keys(state.pools || {}).forEach(function (poolName) {
-      addPoolSheet(wb, used, state, result, poolName);
+      registry.push({
+        key: 'pool:' + poolName,
+        label: poolName,
+        run: function (wb, used, st, result) { addPoolSheet(wb, used, st, result, poolName); }
+      });
     });
+    return registry;
+  }
 
+  function buildFullReport(state, result, meta) {
+    var wb = newWorkbook();
+    var used = Object.create(null);
+    sheetRegistry(state).forEach(function (b) { b.run(wb, used, state, result, meta); });
     return wb;
   }
 
@@ -2488,101 +2523,9 @@ var Exporter = (function () {
   function buildSelectedReport(state, result, meta, selectedKeys) {
     var wb = newWorkbook();
     var used = Object.create(null);
-    var want = function (key) { return selectedKeys.indexOf(key) !== -1; };
-
-    if (want('exec')) {
-      var exec = Reports.executiveRows(state, result);
-      var execRows = [['البيان', 'القيمة']];
-      exec.forEach(function (r) { execRows.push([r.label, r.value]); });
-      execRows.push([]);
-      execRows.push(['التقرير أُنتج في', Fmt.humanTime(meta.at)]);
-      execRows.push(['إصدار التطبيق', meta.version]);
-      execRows.push(['نطاق التقرير', 'كل الأشخاص في الملف — لا تتأثر أرقام هذا التقرير بأي بحث أو فلتر على الشاشة']);
-      addSheet(wb, used, 'الملخص التنفيذي', execRows, { widths: [42, 22], autofilter: false, formats: { 1: M2 } });
-    }
-
-    if (want('pools')) {
-      var poolsHdr = ['المجمع', 'الإجمالي المُدخل', 'الإجمالي بعد التقريب', 'نسبة الخصم', 'الصافي', 'عدد الأعضاء', 'الوزن المستهدف', 'الوزن الفعلي', 'الانحراف', 'ملاحظة'];
-      var poolBody = Reports.poolRows(state, result).map(function (p) {
-        return [p.name, p.gross, p.effectiveGross, p.taxRate, p.net, p.members, p.targetWeight, p.actualWeight,
-          p.deviation == null ? '' : p.deviation,
-          (p.zeroBudget ? 'بلا مبلغ — الأعضاء المثبّتون لن يحصلوا على شيء' : '') + (p.rounded ? (p.zeroBudget ? ' | ' : '') + 'تم تعديل الإجمالي للتقريب' : '')];
-      });
-      addSheet(wb, used, 'المجمعات', [poolsHdr].concat(poolBody), {
-        formats: { 1: M2, 2: M2, 3: PCT, 4: M2, 5: INT, 6: M4, 7: M4, 8: PCT }
-      });
-    }
-
-    if (want('detail')) {
-      var detHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مقفول على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
-      var detBody = Reports.detailRows(state, result).map(function (r) {
-        return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.days, r.penalty, r.manual,
-          r.override == null ? '' : r.override, r.pinned, r.excluded ? 'نعم' : '', r.unresolvedTier ? 'نعم' : '',
-          r.gross, r.tax, r.net, r.ideal, r.drift, r.special ? 'نعم' : '', r.reason, r.notes];
-      });
-      addSheet(wb, used, 'التفصيل الكامل', [detHdr].concat(detBody), {
-        formats: { 0: INT, 5: M4, 6: INT, 7: PCT, 8: M4, 9: M2, 13: M2, 14: M2, 15: M2, 16: M2, 17: M2 }
-      });
-    }
-
-    if (want('unresolved')) {
-      var unresolved = Reports.unresolvedRows(state, result);
-      if (unresolved.length > 0) {
-        var unHdr = ['#', 'الاسم', 'القسم', 'الفئة المُدخلة', 'الأيام', 'سبب الاستبعاد', 'ملاحظات', 'قرار المستخدم'];
-        var unBody = unresolved.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.days, r.cause, r.notes, '']; });
-        unBody.unshift([]);
-        unBody.unshift(['هؤلاء الأشخاص لم يدخلوا في التوزيع ولم يحصلوا على أي مبلغ. المسؤولية عن مراجعتهم على المستخدم.']);
-        addSheet(wb, used, 'بدون فئة', [unHdr].concat(unBody), { formats: { 0: INT, 4: INT }, autofilter: false });
-      }
-    }
-
-    if (want('special')) {
-      var specials = Reports.specialRows(state, result);
-      if (specials.length > 0) {
-        var spHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الصافي', 'سبب الحالة الخاصة', 'ملاحظات'];
-        var spBody = specials.map(function (r) { return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.net, r.reason, r.notes]; });
-        addSheet(wb, used, 'الحالات الخاصة', [spHdr].concat(spBody), { formats: { 0: INT, 5: M4, 6: M2 } });
-      }
-    }
-
-    if (want('dept')) {
-      var deptHdr = ['القسم', 'العدد', 'المستحقون', 'مستبعدون', 'بدون فئة', 'مجموع الأوزان', 'الإجمالي', 'الخصم', 'الصافي'];
-      var deptBody = Reports.deptRows(state, result).map(function (d) {
-        return [d.dept, d.count, d.paid, d.excluded, d.unresolved, d.weight, d.gross, d.tax, d.net];
-      });
-      var deptTotal = deptBody.reduce(function (acc, r) {
-        return ['الإجمالي', acc[1] + r[1], acc[2] + r[2], acc[3] + r[3], acc[4] + r[4], acc[5] + r[5], acc[6] + r[6], acc[7] + r[7], acc[8] + r[8]];
-      }, ['الإجمالي', 0, 0, 0, 0, 0, 0, 0, 0]);
-      addSheet(wb, used, 'حسب القسم', [deptHdr].concat(deptBody).concat([deptTotal]), {
-        formats: { 1: INT, 2: INT, 3: INT, 4: INT, 5: M4, 6: M2, 7: M2, 8: M2 }
-      });
-    }
-
-    if (want('tier')) {
-      var tierHdr = ['الفئة', 'القيمة الأساسية', 'العدد', 'مجموع الأوزان', 'الصافي', 'بدون فئة معروفة'];
-      var tierBody = Reports.tierRows(state, result).map(function (t) {
-        return [t.tier, t.base == null ? '' : t.base, t.count, t.weight, t.net, t.unresolved];
-      });
-      addSheet(wb, used, 'حسب الفئة', [tierHdr].concat(tierBody), { formats: { 1: M2, 2: INT, 3: M4, 4: M2, 5: INT } });
-    }
-
-    if (want('warnings')) {
-      var warns = Reports.warningRows(result);
-      if (warns.length > 0) {
-        var wHdr = ['النوع', 'الهدف', 'الرسالة', 'الرمز'];
-        var wBody = warns.map(function (w) { return [w.kind, w.target, w.message, w.code]; });
-        addSheet(wb, used, 'التنبيهات', [wHdr].concat(wBody), { widths: [26, 14, 70, 22] });
-      }
-    }
-
-    if (want('methodology')) {
-      addSheet(wb, used, 'المنهجية', [['البند', 'التفصيل']].concat(Reports.methodologyRows(state, result)), { widths: [26, 100], autofilter: false });
-    }
-
-    Object.keys(state.pools || {}).forEach(function (poolName) {
-      if (want('pool:' + poolName)) addPoolSheet(wb, used, state, result, poolName);
+    sheetRegistry(state).forEach(function (b) {
+      if (selectedKeys.indexOf(b.key) !== -1) b.run(wb, used, state, result, meta);
     });
-
     return wb;
   }
 
@@ -3676,6 +3619,9 @@ var App = (function () {
       Math.abs(effective - gross) < 0.005 ? 'مطابق تمامًا للمُدخل' : 'فرق ' + Fmt.egp(effective - gross) + ' ج.م بسبب وحدة التقريب',
       Math.abs(effective - gross) < 0.005 ? 'ok' : 'warn'));
     row.appendChild(kpiCard('الصافي للتوزيع', UI.moneyEGP(net, { size: 'lg', currency: true }), 'بعد خصم نسب كل مجمع', 'info'));
+    row.appendChild(kpiCard('نصيب النقطة',
+      state.result && state.result.ok ? el('span', 'money money-lg', el('span', 'money-int', Fmt.egp(state.result.k, 4))) : UI.dash(),
+      'يتغيّر مباشرة مع الأرقام أعلاه', 'flat'));
     row.appendChild(kpiCard('عدد الأشخاص', el('span', 'money money-lg', el('span', 'money-int', Fmt.int(state.people.length))), 'من الملف المحمّل', 'flat'));
     hosts.amountsSummary.appendChild(row);
   }
