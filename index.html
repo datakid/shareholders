@@ -96,7 +96,7 @@ transition:background var(--d2) var(--ease), color var(--d2) var(--ease);
 .page-sub{margin-top:var(--s2); color:var(--ink-3); font-size:var(--t-lg); max-width:74ch; line-height:1.5}
 .section-label{
 display:inline-flex; flex-direction:column; gap:6px;
-font-size:var(--t-xs); font-weight:600; letter-spacing:.075em; text-transform:uppercase; color:var(--ink-3);
+font-size:var(--t-xs); font-weight:600; color:var(--ink-3);
 }
 .section-label::after{content:''; width:24px; height:2px; background:var(--accent); border-radius:2px}
 .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r3); box-shadow:var(--e1)}
@@ -204,7 +204,7 @@ background:transparent; color:var(--ink); font-size:var(--t-md); text-align:star
 .dd-opt[aria-selected="true"] .dd-tick{opacity:1}
 .dd-opt-count{margin-inline-start:auto; font-size:var(--t-xs); color:var(--ink-4)}
 .dd-sep{height:1px; background:var(--line-3); margin:var(--s1) 6px}
-.dd-group{padding:8px 10px 4px; font-size:var(--t-xs); font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-4)}
+.dd-group{padding:8px 10px 4px; font-size:var(--t-xs); font-weight:600; color:var(--ink-4)}
 .chip{
 display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 11px; border-radius:var(--r-pill);
 border:1px solid var(--line-2); background:var(--surface); color:var(--ink-2);
@@ -252,7 +252,7 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease),
 .kpi.kpi-ok::before{background:var(--ok)} .kpi.kpi-warn::before{background:var(--warn)}
 .kpi.kpi-danger::before{background:var(--danger)} .kpi.kpi-info::before{background:var(--info)}
 .kpi.kpi-flat::before{display:none}
-.kpi-label{display:flex; align-items:center; gap:5px; font-size:var(--t-xs); font-weight:600; letter-spacing:.055em; text-transform:uppercase; color:var(--ink-3)}
+.kpi-label{display:flex; align-items:center; gap:5px; font-size:var(--t-xs); font-weight:600; color:var(--ink-3)}
 .kpi-value{margin-top:var(--s2); display:flex; align-items:baseline; gap:6px; flex-wrap:wrap}
 .kpi-foot{margin-top:6px; font-size:var(--t-xs); color:var(--ink-3); line-height:1.45}
 
@@ -272,18 +272,20 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease),
 .table-wrap:hover::-webkit-scrollbar-thumb{background:var(--ink-4)}
 .table-wrap{scrollbar-width:thin; scrollbar-color:var(--line-2) transparent}
 .scroll-shadow{position:absolute; inset-block:0; width:28px; pointer-events:none; opacity:0; transition:opacity var(--d2) var(--ease); z-index:5}
-.scroll-shadow-start{inset-inline-start:0; background:linear-gradient(to left, var(--surface) 0%, transparent 100%)}
 .scroll-shadow-end{inset-inline-end:0; background:linear-gradient(to right, var(--surface) 0%, transparent 100%)}
-.table-wrap.can-scroll-start .scroll-shadow-start{opacity:1}
 .table-wrap.can-scroll-end .scroll-shadow-end{opacity:1}
 table.dt{width:100%; border-collapse:separate; border-spacing:0; font-size:var(--t-md); background:var(--surface)}
-table.dt thead th:first-child{inset-inline-start:0; z-index:3}
-table.dt tbody td:first-child{position:sticky; inset-inline-start:0; z-index:1; background:var(--surface)}
+table.dt.dt-fixed{table-layout:fixed}
+table.dt thead th:first-child{inset-inline-start:0; z-index:3; transition:box-shadow var(--d2) var(--ease)}
+table.dt tbody td:first-child{position:sticky; inset-inline-start:0; z-index:1; background:var(--surface); transition:box-shadow var(--d2) var(--ease)}
 table.dt tbody tr:hover td:first-child{background:var(--surface-2)}
-table.dt tfoot td:first-child{position:sticky; inset-inline-start:0; z-index:2}
+table.dt tfoot td:first-child{position:sticky; inset-inline-start:0; z-index:2; transition:box-shadow var(--d2) var(--ease)}
+.table-wrap.can-scroll-start table.dt thead th:first-child,
+.table-wrap.can-scroll-start table.dt tbody td:first-child,
+.table-wrap.can-scroll-start table.dt tfoot td:first-child{box-shadow:inset 1px 0 0 var(--line-2)}
 table.dt thead th{
 position:sticky; top:0; z-index:2; background:var(--surface-2); color:var(--ink-3);
-font-size:var(--t-xs); font-weight:600; letter-spacing:.055em; text-transform:uppercase;
+font-size:var(--t-xs); font-weight:600;
 text-align:start; padding:11px var(--s3); border-bottom:1px solid var(--line-2); white-space:nowrap;
 }
 table.dt thead th.num-col{text-align:end}
@@ -301,10 +303,14 @@ table.dt tbody tr{transition:background var(--d1) linear}
 table.dt tbody tr:hover td{background:var(--surface-2)}
 table.dt td.num-col{text-align:end; font-variant-numeric:tabular-nums}
 table.dt td.name-col{font-weight:500; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-table.dt tbody tr.is-special td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+table.dt td.dept-col,table.dt td.pool-col{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+table.dt tbody tr.is-special td:first-child::before,
+table.dt tbody tr.is-excluded td:first-child::before,
+table.dt tbody tr.is-orphan td:first-child::before{content:''; position:absolute; inset-block:0; inset-inline-end:0; border-inline-end:3px solid}
+table.dt tbody tr.is-special td:first-child::before{border-color:var(--warn)}
 table.dt tbody tr.is-excluded{color:var(--ink-4)}
-table.dt tbody tr.is-excluded td:first-child{box-shadow:inset 3px 0 0 var(--ink-4)}
-table.dt tbody tr.is-orphan td:first-child{box-shadow:inset 3px 0 0 var(--danger)}
+table.dt tbody tr.is-excluded td:first-child::before{border-color:var(--ink-4)}
+table.dt tbody tr.is-orphan td:first-child::before{border-color:var(--danger)}
 table.dt tfoot td{height:46px; padding:0 var(--s3); background:var(--surface-2); font-weight:600; border-top:1px solid var(--line-2); position:sticky; bottom:0}
 table.dt tfoot td.num-col{text-align:end}
 table.dt.compact tbody td{height:36px}
@@ -443,7 +449,7 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease);
 .chip{flex:0 0 auto}
 .table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch}
 .table-wrap.h-md,.table-wrap.h-lg{max-height:none}
-table.dt{min-width:660px}
+table.dt{min-width:980px}
 table.dt thead th,table.dt tbody td{padding:10px var(--s2)}
 .pager{flex-direction:column; align-items:stretch; gap:var(--s2)}
 .pager-list{justify-content:center; flex-wrap:wrap}
@@ -473,7 +479,6 @@ table.dt thead th,table.dt tbody td{padding:10px var(--s2)}
 .kpi-value .money-int{font-size:var(--t-2xl)}
 .step-pill span:not(.step-dot){display:none}
 .step-pill[aria-current="step"] span:not(.step-dot){display:inline}
-table.dt{min-width:560px}
 }
 @page{size:A4; margin:14mm 12mm}
 @media print{
@@ -483,10 +488,14 @@ body::before{display:none}
 .shell{max-width:none; padding:0}
 .card,.kpi,.chart-card{box-shadow:none; border-color:#ccc; break-inside:avoid}
 .table-wrap{max-height:none !important; overflow:visible !important; border-color:#ccc}
-table.dt{width:100%; border-collapse:collapse}
+table.dt{width:100%; border-collapse:collapse; font-size:10pt}
+table.dt.dt-fixed{table-layout:auto}
 table.dt thead{display:table-header-group}
 table.dt tfoot{display:table-footer-group}
-table.dt thead th{position:static; background:#f2f2f0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+table.dt thead th{position:static; background:#f2f2f0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; white-space:normal}
+table.dt tbody td:first-child,table.dt tfoot td:first-child,table.dt tfoot td{position:static}
+table.dt thead th,table.dt tbody td,table.dt tfoot td{padding:4px 6px}
+table.dt td.name-col,table.dt td.dept-col,table.dt td.pool-col{white-space:normal; overflow:visible; text-overflow:clip; max-width:none}
 table.dt tr{break-inside:avoid}
 table.dt td,table.dt th{border-color:#ccc}
 .num,.mono,table.dt td.num{font-variant-numeric:tabular-nums}
@@ -2881,7 +2890,7 @@ var App = (function () {
       selection: {},
       undoStack: [],
       redoStack: [],
-      ui: { density: 'normal', rowsPerPage: 100, kpiAnimated: false },
+      ui: { density: 'normal', rowsPerPage: 100, kpiAnimated: false, tableDetail: 'simple' },
       __recomputeCount: 0,
       __searchIndex: null,
       __searchIndexFor: null,
@@ -2972,15 +2981,15 @@ var App = (function () {
   ];
 
   var COLUMNS = [
-    { key: 'name', label: 'الاسم', cls: 'name-col', sortable: true, get: function (r) { return r.name; } },
-    { key: 'dept', label: 'القسم', sortable: true, get: function (r) { return r.dept; } },
-    { key: 'tier', label: 'الفئة', sortable: true, get: function (r) { return r.tier; } },
-    { key: 'pool', label: 'المجمع', sortable: true, get: function (r) { return r.pool; } },
-    { key: 'weight', label: 'الوزن', numeric: true, sortable: true, get: function (r) { return r.weight; }, format: Exporter.FORMATS.M4 },
-    { key: 'gross', label: 'الإجمالي', numeric: true, sortable: true, get: function (r) { return r.gross; }, format: Exporter.FORMATS.M2 },
-    { key: 'tax', label: 'الخصم', numeric: true, sortable: true, get: function (r) { return r.tax; }, format: Exporter.FORMATS.M2 },
-    { key: 'net', label: 'الصافي', numeric: true, sortable: true, get: function (r) { return r.net; }, format: Exporter.FORMATS.M2 },
-    { key: 'drift', label: 'الفرق عن المثالي', numeric: true, sortable: true, get: function (r) { return r.drift; }, format: Exporter.FORMATS.M2 }
+    { key: 'name', label: 'الاسم', cls: 'name-col', sortable: true, width: 200, get: function (r) { return r.name; } },
+    { key: 'dept', label: 'القسم', sortable: true, width: 150, get: function (r) { return r.dept; } },
+    { key: 'tier', label: 'الفئة', sortable: true, width: 90, get: function (r) { return r.tier; } },
+    { key: 'pool', label: 'المجمع', sortable: true, width: 150, get: function (r) { return r.pool; } },
+    { key: 'weight', label: 'الوزن', numeric: true, sortable: true, width: 85, detail: true, get: function (r) { return r.weight; }, format: Exporter.FORMATS.M4 },
+    { key: 'gross', label: 'الإجمالي', numeric: true, sortable: true, width: 85, get: function (r) { return r.gross; }, format: Exporter.FORMATS.M2 },
+    { key: 'tax', label: 'الخصم', numeric: true, sortable: true, width: 85, get: function (r) { return r.tax; }, format: Exporter.FORMATS.M2 },
+    { key: 'net', label: 'الصافي', numeric: true, sortable: true, width: 85, get: function (r) { return r.net; }, format: Exporter.FORMATS.M2 },
+    { key: 'drift', label: 'الفرق عن المثالي', numeric: true, sortable: true, width: 85, detail: true, get: function (r) { return r.drift; }, format: Exporter.FORMATS.M2 }
   ];
 
   function activeFilterList() {
@@ -4556,6 +4565,16 @@ var App = (function () {
     bar.appendChild(filterDropdown('القسم', 'dept', uniqueValues('dept')));
     bar.appendChild(filterDropdown('الفئة', 'tier', uniqueValues('tier')));
     bar.appendChild(filterDropdown('المجمع', 'pool', Object.keys(state.pools)));
+    bar.appendChild(UI.dropdown({
+      options: [{ value: 'simple', label: 'مبسّط' }, { value: 'full', label: 'مفصّل' }],
+      value: state.ui.tableDetail === 'full' ? 'full' : 'simple',
+      size: 'sm', ariaLabel: 'تفاصيل الجدول',
+      onChange: function (v) {
+        state.ui.tableDetail = v;
+        scheduleSave();
+        renderTable();
+      }
+    }));
 
     bar.appendChild(el('div', 'topbar-spacer'));
     hosts.count = el('div', 'toolbar-count');
@@ -4673,11 +4692,21 @@ var App = (function () {
       return;
     }
 
+    var showDetail = state.ui.tableDetail === 'full';
+    var cols = COLUMNS.filter(function (c) { return showDetail || !c.detail; });
+
     var tw = el('div', 'table-wrap h-lg');
-    var t = el('table', 'dt' + (state.ui.density === 'compact' ? ' compact' : ''));
+    var t = el('table', 'dt dt-fixed' + (state.ui.density === 'compact' ? ' compact' : ''));
+    var colgroup = el('colgroup');
+    cols.forEach(function (c) {
+      var col = el('col');
+      col.style.width = c.width + 'px';
+      colgroup.appendChild(col);
+    });
+    t.appendChild(colgroup);
     var thead = el('thead');
     var htr = el('tr');
-    COLUMNS.forEach(function (c) {
+    cols.forEach(function (c) {
       var th = el('th', (c.numeric ? 'num-col' : '') + (c.sortable ? ' sortable' : ''));
       var inner = el('div', 'th-inner');
       inner.appendChild(document.createTextNode(c.label));
@@ -4713,20 +4742,29 @@ var App = (function () {
       else if (r.special) tr.className = 'is-special';
 
       var nameTd = el('td', 'name-col');
+      if (r.name) nameTd.title = r.name;
       nameTd.appendChild(Search.highlight(r.name || '—', needle));
       if (r.unresolvedTier) nameTd.appendChild(UI.badge('بدون فئة', 'danger'));
       else if (r.excluded) nameTd.appendChild(UI.badge('مستبعد', 'neutral'));
       else if (r.special) nameTd.appendChild(UI.attachTip(UI.badge('خاص', 'warn'), r.reason));
       tr.appendChild(nameTd);
 
-      tr.appendChild(el('td', null, Search.highlight(r.dept || '—', needle)));
+      var deptTd = el('td', 'dept-col');
+      if (r.dept) deptTd.title = r.dept;
+      deptTd.appendChild(Search.highlight(r.dept || '—', needle));
+      tr.appendChild(deptTd);
+
       tr.appendChild(el('td', null, Search.highlight(r.tier || '—', needle)));
-      tr.appendChild(el('td', null, r.pool || '—'));
-      tr.appendChild(el('td', 'num-col small muted', Fmt.egp(r.weight, 4)));
+
+      var poolTd = el('td', 'pool-col', r.pool || '—');
+      if (r.pool) poolTd.title = r.pool;
+      tr.appendChild(poolTd);
+
+      if (showDetail) tr.appendChild(el('td', 'num-col small muted', Fmt.egp(r.weight, 4)));
       tr.appendChild(el('td', 'num-col', UI.moneyEGP(r.gross)));
       tr.appendChild(el('td', 'num-col', UI.moneyEGP(r.tax)));
       tr.appendChild(el('td', 'num-col', UI.moneyEGP(r.net)));
-      tr.appendChild(el('td', 'num-col', UI.delta(r.drift)));
+      if (showDetail) tr.appendChild(el('td', 'num-col', UI.delta(r.drift)));
       tb.appendChild(tr);
     });
     t.appendChild(tb);
@@ -4741,11 +4779,11 @@ var App = (function () {
     ftr.appendChild(el('td', null, ''));
     ftr.appendChild(el('td', null, ''));
     ftr.appendChild(el('td', null, Fmt.int(slice.length) + ' صف'));
-    ftr.appendChild(el('td', 'num-col', ''));
+    if (showDetail) ftr.appendChild(el('td', 'num-col', ''));
     ftr.appendChild(el('td', 'num-col', UI.moneyEGP(sums.gross)));
     ftr.appendChild(el('td', 'num-col', UI.moneyEGP(sums.tax)));
     ftr.appendChild(el('td', 'num-col', UI.moneyEGP(sums.net)));
-    ftr.appendChild(el('td', 'num-col', ''));
+    if (showDetail) ftr.appendChild(el('td', 'num-col', ''));
     tfoot.appendChild(ftr);
     t.appendChild(tfoot);
 
@@ -5715,6 +5753,21 @@ var App = (function () {
     if (savedSession && !savedSession.__error && savedSession.people && savedSession.people.length) {
       state.__restore = savedSession;
     }
+    var printPrevDetail;
+    window.addEventListener('beforeprint', function () {
+      printPrevDetail = state.ui.tableDetail;
+      if (state.ui.tableDetail === 'full') {
+        state.ui.tableDetail = 'simple';
+        renderTable();
+      }
+    });
+    window.addEventListener('afterprint', function () {
+      if (printPrevDetail !== undefined && printPrevDetail !== state.ui.tableDetail) {
+        state.ui.tableDetail = printPrevDetail;
+        renderTable();
+      }
+      printPrevDetail = undefined;
+    });
     render('all');
   }
 
@@ -6363,13 +6416,9 @@ var SelfTest = (function () {
   function enhance(tw) {
     if (tw.__scrollShadowBound) { updateShadowClasses(tw); return; }
     tw.__scrollShadowBound = true;
-    var startEl = document.createElement('div');
-    startEl.className = 'scroll-shadow scroll-shadow-start';
-    startEl.setAttribute('aria-hidden', 'true');
     var endEl = document.createElement('div');
     endEl.className = 'scroll-shadow scroll-shadow-end';
     endEl.setAttribute('aria-hidden', 'true');
-    tw.appendChild(startEl);
     tw.appendChild(endEl);
     tw.addEventListener('scroll', function () { updateShadowClasses(tw); }, { passive: true });
     updateShadowClasses(tw);
