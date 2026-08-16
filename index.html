@@ -894,7 +894,7 @@ var Engine = (function () {
     (state.people || []).forEach(function (person) {
       var pinned = normalizePinnedPool(person.pinnedPool);
       if (pinned != null && !hasOwn(pools, pinned)) {
-        errors.push({ code: 'UNKNOWN_PINNED_POOL', personId: person.id, poolName: pinned, message: 'المجمع المقفول "' + pinned + '" غير موجود لـ "' + (person.name || person.id) + '"' });
+        errors.push({ code: 'UNKNOWN_PINNED_POOL', personId: person.id, poolName: pinned, message: 'المجمع المثبّت "' + pinned + '" غير موجود لـ "' + (person.name || person.id) + '"' });
       }
     });
     return errors;
@@ -993,7 +993,7 @@ var Engine = (function () {
         var assignedPool = assignment[px.person.id];
         if (assignedPool == null) continue;
         if (!hasOwn(membersByPool, assignedPool)) {
-          return { ok: false, errors: [{ code: 'UNKNOWN_PINNED_POOL', personId: px.person.id, poolName: assignedPool, message: 'المجمع المقفول "' + assignedPool + '" غير موجود' }] };
+          return { ok: false, errors: [{ code: 'UNKNOWN_PINNED_POOL', personId: px.person.id, poolName: assignedPool, message: 'المجمع المثبّت "' + assignedPool + '" غير موجود' }] };
         }
         membersByPool[assignedPool].push({ id: px.person.id, weight: px.weight });
       }
@@ -2163,7 +2163,7 @@ var Reports = (function () {
     var r = [];
     if (person.excluded) r.push('مستبعد');
     if (person.overrideValue != null) r.push('قيمة مخصصة');
-    if (person.pinnedPool) r.push('مقفول على ' + person.pinnedPool);
+    if (person.pinnedPool) r.push('مثبّت على ' + person.pinnedPool);
     if (person.manualFactor != null && person.manualFactor !== 1) r.push('معامل يدوي ' + person.manualFactor);
     if (person.penaltyRate != null && person.penaltyRate > 0) r.push('جزاء ' + Fmt.pct(person.penaltyRate, 0));
     return r.join('، ');
@@ -2498,7 +2498,7 @@ var Exporter = (function () {
   }
 
   function sheetDetail(wb, used, state, result) {
-    var detHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مقفول على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
+    var detHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مثبّت على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
     var detBody = Reports.detailRows(state, result).map(function (r) {
       return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.days, r.penalty, r.manual,
         r.override == null ? '' : r.override, r.pinned, r.excluded ? 'نعم' : '', r.unresolvedTier ? 'نعم' : '',
@@ -2598,7 +2598,7 @@ var Exporter = (function () {
   function addPoolSheet(wb, used, state, result, poolName) {
     var rows = poolDetailRows(state, result, poolName);
     if (rows.length === 0) return;
-    var hdr = ['#', 'الاسم', 'القسم', 'الفئة', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مقفول على', 'مستبعد', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
+    var hdr = ['#', 'الاسم', 'القسم', 'الفئة', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مثبّت على', 'مستبعد', 'الإجمالي', 'الخصم', 'الصافي', 'الصافي المثالي', 'الفرق', 'حالة خاصة', 'السبب', 'ملاحظات'];
     var body = rows.map(function (r) {
       return [r.id, r.name, r.dept, r.tier, r.weight, r.days, r.penalty, r.manual,
         r.override == null ? '' : r.override, r.pinned, r.excluded ? 'نعم' : '',
@@ -2663,7 +2663,7 @@ var Exporter = (function () {
 
   function templateRows(state, mode) {
     var withData = mode === 'current';
-    var hdr = ['الاسم', 'الوظيفة', 'القسم', 'الفئة', 'أيام العمل', 'نسبة الجزاء', 'المعامل اليدوي', 'قيمة مخصصة', 'المجمع المقفول', 'مستبعد', 'ملاحظات'];
+    var hdr = ['الاسم', 'الوظيفة', 'القسم', 'الفئة', 'أيام العمل', 'نسبة الجزاء', 'المعامل اليدوي', 'قيمة مخصصة', 'المجمع المثبّت', 'مستبعد', 'ملاحظات'];
     var body;
     if (withData) {
       body = (state.people || []).map(function (p) {
@@ -2699,13 +2699,13 @@ var Exporter = (function () {
       ['نسبة الجزاء', 'اختياري', 'من 0 إلى 1 (0.1 = خصم 10% من الوزن)'],
       ['المعامل اليدوي', 'اختياري', 'فارغ أو 1 = بلا تعديل. 1.25 = زيادة 25% على الوزن'],
       ['قيمة مخصصة', 'اختياري', 'تتجاوز قيمة الفئة تمامًا لهذا الشخص'],
-      ['المجمع المقفول', 'اختياري', 'يثبّت الشخص في مجمع محدد بالاسم'],
+      ['المجمع المثبّت', 'اختياري', 'يثبّت الشخص في مجمع محدد بالاسم'],
       ['مستبعد', 'اختياري', 'نعم / 1 / صح = خارج التوزيع بقرار صريح'],
       ['ملاحظات', 'اختياري', 'نص حر يُنقل إلى التقارير']
     ];
     if (withData) {
       guide.push([]);
-      guide.push(['ما الذي لم يُنقل؟', '', 'أيام العمل ونسبة الجزاء والقيمة المخصصة خاصة بفترة بعينها، لذلك تُركت فارغة عمدًا لتُدخلها من جديد لكل فترة. المنقول هو ما يثبت بين الفترات فقط: الاسم والوظيفة والقسم والفئة والاستبعاد والقفل اليدوي.']);
+      guide.push(['ما الذي لم يُنقل؟', '', 'أيام العمل ونسبة الجزاء والقيمة المخصصة خاصة بفترة بعينها، لذلك تُركت فارغة عمدًا لتُدخلها من جديد لكل فترة. المنقول هو ما يثبت بين الفترات فقط: الاسم والوظيفة والقسم والفئة والاستبعاد والتثبيت اليدوي.']);
     }
     addSheet(wb, used, 'دليل الأعمدة', guide, { widths: [20, 12, 96], autofilter: false });
 
@@ -2733,7 +2733,7 @@ var Exporter = (function () {
       addSheet(wb, used, 'الإعدادات', rows, { widths: [44, 20], autofilter: false, formats: { 1: M2 } });
     }
     if (scope.people) {
-      var detHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مقفول على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'ملاحظات'];
+      var detHdr = ['#', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مثبّت على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'ملاحظات'];
       var detBody = Reports.detailRows(state, result).map(function (r) {
         return [r.id, r.name, r.dept, r.tier, r.pool, r.weight, r.days, r.penalty, r.manual,
           r.override == null ? '' : r.override, r.pinned, r.excluded ? 'نعم' : '', r.unresolvedTier ? 'نعم' : '',
@@ -2785,7 +2785,7 @@ var Exporter = (function () {
 
   function detailAoa(state, result) {
     var hdr = ['#', 'الاسم', 'الوظيفة', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الأيام', 'الجزاء', 'المعامل',
-      'قيمة مخصصة', 'مقفول على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'ملاحظات'];
+      'قيمة مخصصة', 'مثبّت على', 'مستبعد', 'بدون فئة', 'الإجمالي', 'الخصم', 'الصافي', 'ملاحظات'];
     var body = Reports.detailRows(state, result).map(function (r) {
       return [r.id, r.name, r.job, r.dept, r.tier, r.pool, r.weight, r.days, r.penalty, r.manual,
         r.override == null ? '' : r.override, r.pinned, r.excluded ? 'نعم' : '', r.unresolvedTier ? 'نعم' : '',
@@ -2823,7 +2823,7 @@ var Importer = (function () {
     { key: 'penaltyRate', label: 'نسبة الجزاء', hints: ['جزاء', 'خصم', 'penalty', 'جزاءات'] },
     { key: 'manualFactor', label: 'المعامل اليدوي', hints: ['معامل', 'factor', 'المعامل'] },
     { key: 'overrideValue', label: 'قيمة مخصصة', hints: ['قيمة مخصصة', 'قيمه مخصصه', 'override', 'قيمة خاصة'] },
-    { key: 'pinnedPool', label: 'المجمع المقفول', hints: ['المجمع', 'مجمع', 'pool', 'مقفول'] },
+    { key: 'pinnedPool', label: 'المجمع المثبّت', hints: ['المجمع', 'مجمع', 'pool', 'مقفول', 'مثبت'] },
     { key: 'excluded', label: 'مستبعد', hints: ['مستبعد', 'استبعاد', 'excluded', 'خارج'] },
     { key: 'notes', label: 'ملاحظات', hints: ['ملاحظات', 'ملاحظة', 'notes', 'note'] }
   ];
@@ -3054,7 +3054,7 @@ var App = (function () {
     { key: 'excluded', label: 'مستبعدون', test: function (r) { return r.excluded; } },
     { key: 'penalty', label: 'عليهم جزاء', test: function (r) { return r.penalty > 0; } },
     { key: 'partial', label: 'أيام ناقصة', test: function (r) { return r.days < state.periodDays; } },
-    { key: 'pinned', label: 'مقفولون', test: function (r) { return !!r.pinned; } }
+    { key: 'pinned', label: 'مثبّتون', test: function (r) { return !!r.pinned; } }
   ];
 
   var COLUMNS = [
@@ -3361,7 +3361,7 @@ var App = (function () {
 
   function screenUpload() {
     var wrap = el('div');
-    wrap.appendChild(pageHead('ابدأ بملف الأشخاص', 'ارفع ملف Excel أو CSV يحتوي على الأسماء والفئات. تقدر كذلك تجرب التطبيق ببيانات تجريبية، أو تنزّل قالبًا جاهزًا بالأعمدة الصحيحة.'));
+    wrap.appendChild(pageHead('ابدأ بملف الأشخاص', 'ارفع ملف Excel أو CSV يحتوي على الأسماء والفئات. يمكنك كذلك تجربة التطبيق ببيانات تجريبية، أو تنزّل قالبًا جاهزًا بالأعمدة الصحيحة.'));
 
     var drop = el('div', 'upload mount');
     drop.setAttribute('role', 'button');
@@ -3537,7 +3537,7 @@ var App = (function () {
     if (missing.length) {
       wrap.appendChild(UI.notice({
         tone: 'warn', title: 'حقول مطلوبة غير مربوطة',
-        text: missing.map(function (f) { return f.label; }).join('، ') + ' — لن تقدر تكمل قبل ربطها.'
+        text: missing.map(function (f) { return f.label; }).join('، ') + ' — لن يمكنك المتابعة قبل ربطها.'
       }));
     }
 
@@ -3640,7 +3640,7 @@ var App = (function () {
     var pbody = el('div', 'card-pad stack g3');
     var poolNames = Object.keys(state.pools);
     if (!poolNames.length) {
-      pbody.appendChild(UI.emptyState('لا يوجد أي مجمع', 'أضف مجمعًا واحدًا على الأقل حتى يقدر التطبيق يوزّع.', btn('مجمع جديد', { icon: 'plus', variant: 'primary', onClick: addPool })));
+      pbody.appendChild(UI.emptyState('لا يوجد أي مجمع', 'أضف مجمعًا واحدًا على الأقل حتى يتمكن التطبيق من التوزيع.', btn('مجمع جديد', { icon: 'plus', variant: 'primary', onClick: addPool })));
     }
     poolNames.forEach(function (name) {
       var p = state.pools[name];
@@ -3814,7 +3814,7 @@ var App = (function () {
     UI.confirmModal({
       title: 'حذف مجمع "' + name + '"؟',
       message: pinnedCount > 0
-        ? 'يوجد ' + Fmt.int(pinnedCount) + ' شخص مقفول على هذا المجمع. سيتم فك القفل عنهم وإعادة توزيعهم تلقائيًا.'
+        ? 'يوجد ' + Fmt.int(pinnedCount) + ' شخص مثبّت على هذا المجمع. سيتم إلغاء تثبيتهم وإعادة توزيعهم تلقائيًا.'
         : 'سيُحذف المجمع ومبلغه من الحساب.',
       confirmLabel: 'حذف', danger: true,
       onConfirm: function () {
@@ -3855,9 +3855,9 @@ var App = (function () {
     return UI.notice({
       tone: 'danger',
       title: Fmt.int(ids.length) + ' شخص بدون فئة معروفة — تم استبعادهم من التوزيع',
-      text: preview + '. هؤلاء لم يحصلوا على أي مبلغ لأن فئتهم غير معرّفة في الإعدادات. القرار عليك: عرّف فئتهم، أو أعطهم قيمة مخصصة، أو استبعدهم رسميًا. سيظهرون في ورقة «بدون فئة» في كل تقرير مُصدَّر.',
+      text: preview + '. هؤلاء لم يحصلوا على أي مبلغ لأن فئتهم غير معرّفة في الإعدادات. القرار يعود إليك: عرّف فئتهم، أو أعطهم قيمة مخصصة، أو استبعدهم رسميًا. سيظهرون في ورقة «بدون فئة» في كل تقرير مُصدَّر.',
       actions: [
-        btn('أرِني هؤلاء', {
+        btn('إظهار هؤلاء', {
           variant: 'primary', size: 'sm', onClick: function () {
             state.filters = { q: '', dept: '', tier: '', pool: '', flags: ['unresolved'] };
             state.page.allocate = 1;
@@ -3965,7 +3965,7 @@ var App = (function () {
       acts.push(btn('تعديل المجمعات', { variant: 'primary', size: 'sm', onClick: function () { goto('amounts'); } }));
     }
     if (codes.indexOf('UNKNOWN_PINNED_POOL') !== -1) {
-      acts.push(btn('مراجعة الأقفال', { size: 'sm', onClick: function () { openSettings('pools'); } }));
+      acts.push(btn('مراجعة التثبيت', { size: 'sm', onClick: function () { openSettings('pools'); } }));
     }
     if (codes.indexOf('NO_ELIGIBLE_PEOPLE') !== -1) {
       acts.push(btn('تعريف الفئات', { variant: 'primary', size: 'sm', onClick: function () { openSettings('tiers'); } }));
@@ -4003,7 +4003,7 @@ var App = (function () {
 
   function screenAllocate() {
     var wrap = el('div');
-    wrap.appendChild(pageHead('راجع وصحّح', 'كل صف قابل للتعديل هنا مباشرة. أي تغيير يُعاد حسابه فورًا، والأرقام أسفل الجدول تتحدث معه.'));
+    wrap.appendChild(pageHead('راجع وصحّح', 'كل صف قابل للتعديل هنا مباشرة. أي تغيير يُعاد حسابه فورًا، وتتحدّث الأرقام أسفل الجدول فورًا.'));
 
     if (!state.result) recompute();
 
@@ -4044,7 +4044,7 @@ var App = (function () {
     { key: 'penaltyRate', label: 'الجزاء %', type: 'pct', width: '92px', numeric: true },
     { key: 'manualFactor', label: 'المعامل', type: 'number', width: '92px', numeric: true },
     { key: 'overrideValue', label: 'قيمة مخصصة', type: 'number', width: '116px', numeric: true },
-    { key: 'pinnedPool', label: 'مقفول على', type: 'pool', width: '132px' },
+    { key: 'pinnedPool', label: 'مثبّت على', type: 'pool', width: '132px' },
     { key: 'excluded', label: 'مستبعد', type: 'bool', width: '78px' },
     { key: 'notes', label: 'ملاحظات', type: 'text', width: '150px' }
   ];
@@ -4227,7 +4227,7 @@ var App = (function () {
     if (f.type === 'tier' || f.type === 'pool') {
       var isTier = f.type === 'tier';
       var names = isTier ? tierNames : poolNames;
-      var opts = [{ value: '', label: isTier ? '— بدون فئة —' : '— غير مقفول —' }];
+      var opts = [{ value: '', label: isTier ? '— بدون فئة —' : '— غير مثبّت —' }];
       names.forEach(function (n) { opts.push({ value: n, label: n }); });
       var currentVal = isTier ? (p.tier || '') : (Engine.normalizePinnedPool(p.pinnedPool) || '');
       if (isTier && currentVal && names.indexOf(currentVal) === -1) {
@@ -4306,7 +4306,7 @@ var App = (function () {
         { value: 'manualFactor', label: 'المعامل اليدوي' },
         { value: 'overrideValue', label: 'قيمة مخصصة' },
         { value: 'tier', label: 'الفئة' },
-        { value: 'pinnedPool', label: 'المجمع المقفول' },
+        { value: 'pinnedPool', label: 'المجمع المثبّت' },
         { value: 'dept', label: 'القسم' },
         { value: 'excluded', label: 'استبعاد' },
         { value: 'notes', label: 'ملاحظات' }
@@ -4324,7 +4324,7 @@ var App = (function () {
       var control;
       if (fieldKey === 'tier' || fieldKey === 'pinnedPool') {
         var names = Object.keys(fieldKey === 'tier' ? state.tiers : state.pools);
-        var opts = [{ value: '', label: fieldKey === 'tier' ? '— بدون فئة —' : '— فك القفل —' }];
+        var opts = [{ value: '', label: fieldKey === 'tier' ? '— بدون فئة —' : '— إلغاء التثبيت —' }];
         names.forEach(function (n) { opts.push({ value: n, label: n }); });
         control = UI.dropdown({ options: opts, value: value, onChange: function (v) { value = v; } });
         control.firstChild.style.width = '100%';
@@ -4352,7 +4352,7 @@ var App = (function () {
     }));
     body.appendChild(UI.notice({
       tone: 'accent',
-      text: 'التعديل الجماعي يُسجَّل كخطوة واحدة في التراجع، فتقدر ترجّعه كله بضغطة.'
+      text: 'التعديل الجماعي يُسجَّل كخطوة واحدة في التراجع، فيمكنك التراجع عنه بالكامل بنقرة واحدة.'
     }));
     m.body.appendChild(body);
 
@@ -4574,7 +4574,7 @@ var App = (function () {
       block.appendChild(nums);
 
       if (p.zeroBudget) {
-        block.appendChild(el('div', 'tiny', 'هذا المجمع بلا مبلغ، والأعضاء المثبّتون عليه لن يحصلوا على شيء. اعطِه مبلغًا أو فُكّ أقفالهم.'));
+        block.appendChild(el('div', 'tiny', 'هذا المجمع بلا مبلغ، والأعضاء المثبّتون عليه لن يحصلوا على شيء. أعطِه مبلغًا أو ألغِ تثبيتهم.'));
       } else if (p.deviation != null) {
         var absDev = Math.abs(p.deviation);
         var tone = absDev < 0.02 ? 'is-ok' : (absDev < 0.08 ? 'is-warn' : 'is-danger');
@@ -4711,7 +4711,7 @@ var App = (function () {
     hosts.count.appendChild(el('b', null, Fmt.int(shown)));
     hosts.count.appendChild(document.createTextNode(shown === total ? ' صف' : ' من ' + Fmt.int(total)));
     if (shown !== total) {
-      hosts.count.appendChild(el('div', 'toolbar-trust', 'الإجماليات أعلى محسوبة على كل الصفوف'));
+      hosts.count.appendChild(el('div', 'toolbar-trust', 'الإجماليات أعلاه محسوبة على كل الصفوف'));
     }
   }
 
@@ -5062,7 +5062,7 @@ var App = (function () {
     var boxes = [
       { key: 'settings', label: 'الإعدادات', hint: 'الفئات والمجمعات ونسب الخصم ووحدة التقريب وأيام الفترة' },
       { key: 'people', label: 'جدول الأشخاص الحالي', hint: 'كل الأشخاص بنتائجهم — من كامل الملف، لا يتأثر بفلاتر الشاشة' },
-      { key: 'special', label: 'الحالات الخاصة فقط', hint: 'المستبعدون والمقفولون وأصحاب الجزاء والقيم المخصصة — تُحسب من كامل الملف' }
+      { key: 'special', label: 'الحالات الخاصة فقط', hint: 'المستبعدون والمثبّتون وأصحاب الجزاء والقيم المخصصة — تُحسب من كامل الملف' }
     ];
 
     var summary = el('div', 'notice notice-accent');
@@ -5182,7 +5182,7 @@ var App = (function () {
           return;
         }
         if (data.schemaVersion != null && data.schemaVersion > Store.SCHEMA) {
-          UI.toast('هذا الملف من نسخة أحدث من التطبيق (' + data.schemaVersion + ' > ' + Store.SCHEMA + ') — لن يُقرأ لتجنّب فقدان بيانات', 'danger');
+          UI.toast('هذا الملف من نسخة أحدث من التطبيق (' + data.schemaVersion + ' > ' + Store.SCHEMA + ') — لن يُقرأ لتجنّب فقدان البيانات', 'danger');
           return;
         }
         if (data.kind === 'qisma.settings') {
@@ -5364,7 +5364,7 @@ var App = (function () {
 
   function screenExport() {
     var wrap = el('div');
-    wrap.appendChild(pageHead('مركز التصدير', 'التقرير الكامل يشمل كل الأشخاص دائمًا. تصدير العرض يعطيك ما تراه على الشاشة بنفس الترتيب والفلاتر — الاثنان مختلفان بقصد، وكل ملف يقول عن نفسه أي نوع هو.'));
+    wrap.appendChild(pageHead('مركز التصدير', 'التقرير الكامل يشمل كل الأشخاص دائمًا. تصدير العرض يعطيك ما تراه على الشاشة بنفس الترتيب والفلاتر — الاثنان مختلفان بقصد، ويوضّح كل ملف نوعه بنفسه.'));
 
     if (state.result && !state.result.ok) {
       wrap.appendChild(errorPanel(state.result));
@@ -5438,7 +5438,7 @@ var App = (function () {
 
     grid.appendChild(exportCard({
       icon: 'table', title: 'قالب للاستخدام لاحقًا',
-      desc: 'ملف Excel بالأعمدة الصحيحة وورقة شرح لكل عمود، مع الفئات والمجمعات المعرّفة عندك.',
+      desc: 'ملف Excel بالأعمدة الصحيحة وورقة شرح لكل عمود، مع الفئات والمجمعات المعرّفة لديك.',
       sheets: ['البيانات', 'دليل الأعمدة', 'الفئات المعرّفة', 'المجمعات المعرّفة'],
       controls: tmplRadio,
       action: tmplBtn
@@ -5687,7 +5687,7 @@ var App = (function () {
 
   function panePools(pane, m) {
     pane.appendChild(el('h3', 'pane-title', 'المجمعات'));
-    pane.appendChild(el('p', 'pane-intro', 'كل مجمع مصدر مبلغ منفصل بنسبة خصم خاصة به. التوزيع يوازن الأوزان بين المجمعات تلقائيًا، إلا من قفلته يدويًا على مجمع محدد.'));
+    pane.appendChild(el('p', 'pane-intro', 'كل مجمع مصدر مبلغ منفصل بنسبة خصم خاصة به. التوزيع يوازن الأوزان بين المجمعات تلقائيًا، إلا من ثبّته يدويًا على مجمع محدد.'));
     var list = el('div', 'stack');
     Object.keys(state.pools).forEach(function (name) {
       var p = state.pools[name];
@@ -5697,7 +5697,7 @@ var App = (function () {
       left.appendChild(el('div', 'setting-name', name));
       left.appendChild(el('div', 'setting-desc',
         'إجمالي ' + Fmt.egp(p.gross) + ' · خصم ' + Fmt.pctExact(p.taxRate) + ' · صافي ' + Fmt.egp(p.gross * (1 - p.taxRate)) +
-        (pinned ? ' · ' + Fmt.int(pinned) + ' مقفول' : '')));
+        (pinned ? ' · ' + Fmt.int(pinned) + ' مثبّت' : '')));
       row.appendChild(left);
       row.appendChild(btn('تعديل', {
         size: 'sm', onClick: function () { if (m) m.close(); goto('amounts'); }
@@ -6095,7 +6095,7 @@ var SelfTest = (function () {
     (function T14() {
       var people = [person(1, { pinnedPool: 'الخدمة' }), person(2), person(3)];
       var res = Engine.runPipeline(baseState(people));
-      record('T14 — المقفول يبقى في مجمعه', res.ok && res.people[0].pool === 'الخدمة', 'مجمع المقفول: ' + res.people[0].pool);
+      record('T14 — المثبّت يبقى في مجمعه', res.ok && res.people[0].pool === 'الخدمة', 'مجمع المثبّت: ' + res.people[0].pool);
     })();
 
     (function T15() {
