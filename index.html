@@ -145,6 +145,20 @@ font-size:var(--t-xs); font-weight:600; color:var(--ink-3);
 .card-head{display:flex; align-items:flex-start; justify-content:space-between; gap:var(--s4); padding:var(--s4) var(--s5); border-bottom:1px solid var(--line-3)}
 .card-title{font-size:var(--t-lg)}
 .card-note{margin-top:2px; font-size:var(--t-sm); color:var(--ink-3)}
+.pool-list{display:flex; flex-direction:column; gap:var(--s3)}
+.pool-item{
+padding:var(--s4); background:var(--surface-2); border:1px solid var(--line-3); border-radius:var(--r3);
+transition:border-color var(--d2) var(--ease), box-shadow var(--d2) var(--ease), background var(--d2) var(--ease);
+}
+.pool-item:hover{border-color:var(--line-2); box-shadow:var(--e1); background:var(--surface)}
+.pool-item-top{display:flex; align-items:center; gap:var(--s2); margin-bottom:var(--s3)}
+.pool-name{flex:1 1 auto; background:transparent; border-color:transparent; padding-inline-start:0; font-size:var(--t-lg); font-weight:600; letter-spacing:-.01em}
+.pool-name:hover:not(:disabled),.pool-name:focus{background:var(--surface); border-color:var(--line-2); padding-inline-start:var(--s3)}
+.pool-item-fields{display:flex; align-items:flex-end; gap:var(--s3); flex-wrap:wrap}
+.pool-item-fields>.field{flex:1 1 130px; min-width:110px}
+.pool-net{flex:1 1 150px; min-width:140px}
+.pool-net .field-label{margin-bottom:6px}
+.pool-net .money-int{color:var(--accent-ink)}
 .grid{display:grid; gap:var(--s4)}
 .stack{display:flex; flex-direction:column}
 .row{display:flex; align-items:center}
@@ -234,6 +248,7 @@ background:var(--surface); border:1px solid var(--line-2); border-radius:var(--r
 animation:pop var(--d2) var(--ease-out);
 }
 .dd-panel.align-end{inset-inline-start:auto; inset-inline-end:0}
+.dd-panel-portal{position:fixed; top:auto; inset-inline-start:auto; inset-inline-end:auto; min-width:0}
 @keyframes pop{from{opacity:0; transform:translateY(-4px) scale(.985)}to{opacity:1; transform:none}}
 .dd-opt{
 display:flex; align-items:center; gap:var(--s2); width:100%; padding:8px 10px; border:0; border-radius:var(--r1);
@@ -512,6 +527,7 @@ table.dt thead th,table.dt tbody td{padding:10px var(--s2)}
 .settings-pane{max-height:none; overflow:visible}
 .setting-row,.setting-row.wide{grid-template-columns:1fr; gap:var(--s2); align-items:stretch}
 .setting-row .input,.setting-row .dd,.setting-row .dd-trigger{width:100%}
+.pool-item-fields{flex-direction:column; align-items:stretch}
 .chart-row{grid-template-columns:minmax(0,42%) 1fr; row-gap:2px}
 .chart-val{grid-column:2; text-align:start; font-size:var(--t-xs)}
 .btn{min-height:42px}
@@ -1795,7 +1811,7 @@ var UI = (function () {
     function open() {
       if (trigger.getAttribute('aria-expanded') === 'true') { closeOpenPanel(); return; }
       closeOpenPanel();
-      var panel = el('div', 'dd-panel' + (opts.align === 'end' ? ' align-end' : ''));
+      var panel = el('div', 'dd-panel dd-panel-portal');
       panel.setAttribute('role', 'listbox');
       var buttons = [];
       opts.options.forEach(function (o) {
@@ -1818,9 +1834,41 @@ var UI = (function () {
         buttons.push(b);
         panel.appendChild(b);
       });
-      wrap.appendChild(panel);
+      document.body.appendChild(panel);
+
+      function place() {
+        var tRect = trigger.getBoundingClientRect();
+        var vw = document.documentElement.clientWidth;
+        var vh = document.documentElement.clientHeight;
+        var pw = Math.min(Math.max(tRect.width, panel.offsetWidth), vw - 16);
+        panel.style.width = pw + 'px';
+        var rtl = getComputedStyle(document.documentElement).direction === 'rtl';
+        var anchorRight = opts.align === 'end' ? !rtl : rtl;
+        var left = anchorRight ? (tRect.right - pw) : tRect.left;
+        left = Math.max(8, Math.min(left, vw - pw - 8));
+        panel.style.left = left + 'px';
+        var ph = panel.offsetHeight;
+        var openUp = (tRect.bottom + ph + 8 > vh) && (tRect.top - ph - 8 > 0);
+        panel.style.top = (openUp ? (tRect.top - ph - 6) : (tRect.bottom + 6)) + 'px';
+      }
+      place();
+
+      function onScroll() {
+        var tRect = trigger.getBoundingClientRect();
+        if (tRect.bottom < 0 || tRect.top > document.documentElement.clientHeight) { closeOpenPanel(); return; }
+        place();
+      }
+      window.addEventListener('scroll', onScroll, true);
+      window.addEventListener('resize', place);
+
       trigger.setAttribute('aria-expanded', 'true');
-      openPanel = { panel: panel, trigger: trigger };
+      openPanel = {
+        panel: panel, trigger: trigger,
+        onClose: function () {
+          window.removeEventListener('scroll', onScroll, true);
+          window.removeEventListener('resize', place);
+        }
+      };
       var idx = buttons.findIndex(function (b) { return b.getAttribute('aria-selected') === 'true'; });
       if (idx < 0) idx = 0;
       function focusAt(n) {
@@ -3637,22 +3685,27 @@ var App = (function () {
     ph.appendChild(btn('مجمع جديد', { icon: 'plus', size: 'sm', variant: 'primary', onClick: addPool }));
     poolCard.appendChild(ph);
 
-    var pbody = el('div', 'card-pad stack g3');
+    var pbody = el('div', 'card-pad pool-list');
     var poolNames = Object.keys(state.pools);
     if (!poolNames.length) {
       pbody.appendChild(UI.emptyState('لا يوجد أي مجمع', 'أضف مجمعًا واحدًا على الأقل حتى يتمكن التطبيق من التوزيع.', btn('مجمع جديد', { icon: 'plus', variant: 'primary', onClick: addPool })));
     }
     poolNames.forEach(function (name) {
       var p = state.pools[name];
-      var row = el('div', 'row g3 wrap');
-      row.style.paddingBottom = 'var(--s3)';
-      row.style.borderBottom = '1px solid var(--line-3)';
+      var item = el('div', 'pool-item');
 
+      var top = el('div', 'pool-item-top');
       var nameIn = UI.input({
         value: name, ariaLabel: 'اسم المجمع', cls: 'pool-name',
         onChange: function (v) { renamePool(name, v); }
       });
-      nameIn.style.flex = '1 1 180px';
+      top.appendChild(nameIn);
+      var del = btn('', { icon: 'trash', variant: 'ghost', size: 'sm', title: 'حذف المجمع', onClick: function () { removePool(name); } });
+      if (poolNames.length <= 1) { del.disabled = true; del.title = 'لا يمكن حذف آخر مجمع'; }
+      top.appendChild(del);
+      item.appendChild(top);
+
+      var fields = el('div', 'pool-item-fields');
 
       var grossIn = UI.input({
         value: p.gross, numeric: true, grouped: true, min: 0, step: '0.01', ariaLabel: 'إجمالي ' + name,
@@ -3663,7 +3716,7 @@ var App = (function () {
           renderAmountsSummary();
         }
       });
-      grossIn.style.flex = '0 0 160px';
+      fields.appendChild(UI.field('الإجمالي (ج.م)', grossIn));
 
       var taxIn = UI.input({
         value: Fmt.pctValue(p.taxRate), numeric: true, type: 'number', min: 0, max: 99.9999, step: 'any', ariaLabel: 'نسبة خصم ' + name,
@@ -3675,21 +3728,15 @@ var App = (function () {
           renderAmountsSummary();
         }
       });
-      taxIn.style.flex = '0 0 120px';
+      fields.appendChild(UI.field('الخصم (%)', taxIn));
 
-      row.appendChild(UI.field('اسم المجمع', nameIn));
-      row.appendChild(UI.field('الإجمالي (ج.م)', grossIn));
-      row.appendChild(UI.field('الخصم (%)', taxIn));
-      var net = el('div', 'stack g2');
+      var net = el('div', 'stack g2 pool-net');
       net.appendChild(el('div', 'field-label', 'الصافي'));
-      net.appendChild(UI.moneyEGP(p.gross * (1 - p.taxRate), { currency: true }));
-      row.appendChild(net);
-      row.appendChild(el('div', 'topbar-spacer'));
-      var del = btn('', { icon: 'trash', variant: 'ghost', title: 'حذف المجمع', onClick: function () { removePool(name); } });
-      del.style.alignSelf = 'flex-end';
-      if (poolNames.length <= 1) { del.disabled = true; del.title = 'لا يمكن حذف آخر مجمع'; }
-      row.appendChild(del);
-      pbody.appendChild(row);
+      net.appendChild(UI.moneyEGP(p.gross * (1 - p.taxRate), { currency: true, size: 'lg' }));
+      fields.appendChild(net);
+
+      item.appendChild(fields);
+      pbody.appendChild(item);
     });
     poolCard.appendChild(pbody);
     wrap.appendChild(poolCard);
@@ -3860,8 +3907,9 @@ var App = (function () {
         btn('إظهار هؤلاء', {
           variant: 'primary', size: 'sm', onClick: function () {
             state.filters = { q: '', dept: '', tier: '', pool: '', flags: ['unresolved'] };
-            state.page.allocate = 1;
-            renderScreen();
+            state.gridOnlyProblems = false;
+            state.page.grid = 1;
+            goto('allocate');
           }
         }),
         btn('تعريف الفئات', { size: 'sm', onClick: function () { openSettings('tiers'); } }),
@@ -3910,6 +3958,8 @@ var App = (function () {
       btn('صفوف بها مشاكل فقط', {
         size: 'sm', onClick: function () {
           state.filters = { q: '', dept: '', tier: '', pool: '', flags: ['special'] };
+          state.gridOnlyProblems = false;
+          state.page.grid = 1;
           renderScreen();
         }
       })
@@ -4056,6 +4106,18 @@ var App = (function () {
       ((state.result && state.result.warnings) || []).forEach(function (w) { if (w.personId != null) ids[w.personId] = true; });
       rows = rows.filter(function (p) { return ids[p.id] || Reports.isSpecial(p); });
     }
+    if (state.filters.flags && state.filters.flags.length) {
+      var rmap = Object.create(null);
+      rowsCache().forEach(function (r) { rmap[r.id] = r; });
+      var defs = state.filters.flags.map(function (key) {
+        return FLAGS.filter(function (f) { return f.key === key; })[0];
+      }).filter(Boolean);
+      rows = rows.filter(function (p) {
+        var r = rmap[p.id];
+        if (!r) return false;
+        return defs.every(function (def) { return def.test(r); });
+      });
+    }
     var q = state.filters.q;
     if (q) {
       var needle = Engine.normalizeLoose(q);
@@ -4107,6 +4169,22 @@ var App = (function () {
       onChange: function (v) { state.gridOnlyProblems = v; state.page.grid = 1; renderGrid(); }
     }));
 
+    (state.filters.flags || []).forEach(function (key) {
+      var def = FLAGS.filter(function (f) { return f.key === key; })[0];
+      if (!def) return;
+      var chip = el('button', 'chip');
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', 'true');
+      chip.appendChild(document.createTextNode(def.label));
+      chip.appendChild(Icons.svg('x', 'chip-x'));
+      chip.addEventListener('click', function () {
+        state.filters.flags = state.filters.flags.filter(function (k) { return k !== key; });
+        state.page.grid = 1;
+        renderGrid();
+      });
+      bar.appendChild(chip);
+    });
+
     bar.appendChild(el('div', 'topbar-spacer'));
     var undoBtn = btn('', { icon: 'undo', variant: 'ghost', size: 'sm', title: 'تراجع (Ctrl+Z)', onClick: undo });
     undoBtn.disabled = !state.undoStack.length;
@@ -4145,7 +4223,7 @@ var App = (function () {
       hosts.gridBody.appendChild(el('div', 'card', UI.emptyState(
         state.filters.q ? 'لا نتائج للبحث' : 'لا صفوف مطابقة',
         state.filters.q ? 'جرّب كلمة أقصر أو امسح البحث.' : 'أزل فلتر «الصفوف بها مشاكل فقط».',
-        btn('مسح الفلاتر', { onClick: function () { state.filters.q = ''; state.gridOnlyProblems = false; renderGrid(); } })
+        btn('مسح الفلاتر', { onClick: function () { state.filters.q = ''; state.filters.flags = []; state.gridOnlyProblems = false; state.page.grid = 1; renderGrid(); } })
       )));
       return;
     }
