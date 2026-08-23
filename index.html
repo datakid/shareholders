@@ -523,6 +523,9 @@ tr.flash-update{animation:row-flash calc(var(--d4) * 1.5) var(--ease-out)}
 .topbar-inner > .topbar-spacer{display:none}
 .topbar-actions{grid-area:actions; justify-content:flex-end}
 .brand-tag{display:none}
+.topbar-actions .btn{width:28px; height:28px; padding:0; justify-content:center}
+.topbar-actions .btn .btn-label{display:none}
+.topbar-link .link-text{display:none}
 .stepper{width:100%; overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch; scrollbar-width:none; border-radius:var(--r2); justify-content:flex-start}
 .stepper::-webkit-scrollbar{display:none}
 .step-pill{flex:0 0 auto; min-height:38px}
@@ -1719,7 +1722,7 @@ var UI = (function () {
     var b = el('button', 'btn ' + (opts.variant ? 'btn-' + opts.variant : '') + (opts.size === 'sm' ? ' btn-sm' : '') + (opts.block ? ' btn-block' : '') + (opts.cls ? ' ' + opts.cls : ''));
     b.type = 'button';
     if (opts.icon) b.appendChild(Icons.svg(opts.icon));
-    if (label) b.appendChild(document.createTextNode(label));
+    if (label) b.appendChild(el('span', 'btn-label', label));
     if (!label && opts.icon) { b.classList.add('btn-icon'); b.setAttribute('aria-label', opts.title || ''); }
     if (opts.title) b.title = opts.title;
     if (opts.disabled) b.disabled = true;
@@ -2872,10 +2875,6 @@ var Exporter = (function () {
 
   function write(wb, filename) {
     if (tryShareWrite(wb, filename)) return;
-    writeViaAnchor(wb, filename);
-  }
-
-  function writeViaAnchor(wb, filename) {
     var anchorSupported = (function () {
       try { return typeof document.createElement('a').download !== 'undefined'; }
       catch (e) { return false; }
@@ -2894,10 +2893,7 @@ var Exporter = (function () {
       var blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       var file = new File([blob], filename, { type: blob.type });
       if (!navigator.canShare({ files: [file] })) return false;
-      navigator.share({ files: [file] }).catch(function (err) {
-        if (err && err.name === 'AbortError') return;
-        writeViaAnchor(wb, filename);
-      });
+      navigator.share({ files: [file] }).catch(function () {});
       return true;
     } catch (e) {
       return false;
@@ -3415,7 +3411,7 @@ var App = (function () {
     mizanLink.target = '_blank';
     mizanLink.rel = 'noopener noreferrer';
     mizanLink.setAttribute('aria-label', 'ميزان — أداة أخرى، يفتح في تبويب جديد');
-    mizanLink.appendChild(document.createTextNode('ميزان'));
+    mizanLink.appendChild(el('span', 'link-text', 'ميزان'));
     var extIcon = Icons.svg('arrowUp');
     extIcon.classList.add('icon-ext');
     mizanLink.appendChild(extIcon);
@@ -3423,7 +3419,9 @@ var App = (function () {
     hosts.themeBtn = UI.iconBtn(THEME_ICON[Theme.resolve()], 'المظهر', openThemeMenu, 'sm');
     paintThemeBtn();
     actions.appendChild(hosts.themeBtn);
-    actions.appendChild(UI.iconBtn('settings', 'الإعدادات', openSettings, 'sm'));
+    var settingsBtn = btn('الإعدادات', { icon: 'settings', variant: 'ghost', size: 'sm', title: 'الإعدادات', onClick: openSettings });
+    settingsBtn.setAttribute('aria-label', 'الإعدادات');
+    actions.appendChild(settingsBtn);
     inner.appendChild(actions);
     bar.appendChild(inner);
     hosts.root.appendChild(bar);
