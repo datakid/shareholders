@@ -42,7 +42,7 @@ color-scheme:light;
 --e1:0 1px 2px rgba(20,20,19,.05), 0 1px 1px rgba(20,20,19,.04);
 --e2:0 2px 4px rgba(20,20,19,.05), 0 6px 16px -6px rgba(20,20,19,.10);
 --e3:0 4px 8px rgba(20,20,19,.06), 0 18px 44px -12px rgba(20,20,19,.18);
---d1:90ms; --d2:150ms; --d3:220ms; --d4:340ms;
+--d1:90ms; --d2:150ms; --d3:220ms; --d4:340ms; --d5:600ms;
 --ease:cubic-bezier(.2,.6,.2,1); --ease-out:cubic-bezier(.16,.84,.28,1);
 --font:'IBM Plex Sans Arabic','Noto Sans Arabic','Segoe UI',system-ui,sans-serif;
 --nav-h:64px;
@@ -96,14 +96,21 @@ position:sticky; top:0; z-index:60; height:var(--nav-h);
 display:flex; align-items:center; gap:var(--s4);
 padding:0 var(--s5); margin-bottom:var(--s5);
 background:var(--glass); border-bottom:1px solid var(--line);
+transition:box-shadow var(--d3) var(--ease), border-color var(--d3) var(--ease);
 }
+.topbar.is-elevated{box-shadow:var(--e2); border-color:var(--line-2)}
 @supports (backdrop-filter:blur(1px)){.topbar{backdrop-filter:blur(14px) saturate(1.5)}}
 @supports not (backdrop-filter:blur(1px)){.topbar{background:var(--surface)}}
 .topbar-inner{max-width:1320px; margin:0 auto; width:100%; display:flex; align-items:center; gap:var(--s4)}
 .brand{display:flex; align-items:center; gap:var(--s3); min-width:0}
 .brand-mark{width:34px; height:34px; flex:none; display:block}
-.brand-mark .wedge{transform-origin:16px 16px; transition:transform var(--d4) var(--ease-out)}
-.brand-mark.lift .wedge{transform:translate(1.4px,-1.4px) rotate(-3deg)}
+.brand-mark .wedge{transform-origin:16px 16px}
+.brand-mark.boot-reveal .wedge{animation:wedge-reveal var(--d5) var(--ease-out) both}
+@keyframes wedge-reveal{
+0%{transform:translate(2.4px,-2.4px) rotate(-8deg); opacity:.5}
+60%{transform:translate(1.4px,-1.4px) rotate(-3deg)}
+100%{transform:none; opacity:1}
+}
 .brand-text{display:flex; flex-direction:column; min-width:0}
 .brand-name{font-size:var(--t-lg); font-weight:600; letter-spacing:-.02em; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .brand-name span{color:var(--ink-4); font-weight:400; font-size:var(--t-xs); margin-inline-start:6px; letter-spacing:0}
@@ -118,7 +125,9 @@ transition:color var(--d2) var(--ease), background-color var(--d2) var(--ease);
 .topbar-link:hover,.topbar-link:focus-visible{color:var(--accent); background:var(--surface-2)}
 .topbar-link .icon-ext{width:11px; height:11px; transform:rotate(45deg); flex:none}
 
-.stepper{display:flex; align-items:center; gap:var(--s1); padding:var(--s1); background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-pill)}
+.topbar-steps{min-width:0}
+.stepper{display:flex; align-items:center; gap:var(--s1); padding:var(--s1); background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-pill); max-width:100%; overflow-x:auto; scrollbar-width:none}
+.stepper::-webkit-scrollbar{display:none}
 .step-pill{
 display:flex; align-items:center; gap:7px; padding:7px 14px; border:0; border-radius:var(--r-pill);
 background:transparent; color:var(--ink-3); font-size:var(--t-sm); font-weight:500; cursor:pointer; white-space:nowrap;
@@ -139,7 +148,8 @@ transition:background var(--d2) var(--ease), color var(--d2) var(--ease);
 display:inline-flex; flex-direction:column; gap:6px;
 font-size:var(--t-xs); font-weight:600; color:var(--ink-3);
 }
-.section-label::after{content:''; width:24px; height:2px; background:var(--accent); border-radius:2px}
+.section-label::after{content:''; height:2px; background:var(--accent); border-radius:2px; animation:label-underline var(--d4) var(--ease-out) both}
+@keyframes label-underline{from{width:0}to{width:24px}}
 .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r3); box-shadow:var(--e1)}
 .card-pad{padding:var(--s5)}
 .card-head{display:flex; align-items:flex-start; justify-content:space-between; gap:var(--s4); padding:var(--s4) var(--s5); border-bottom:1px solid var(--line-3)}
@@ -178,6 +188,7 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease),
 }
 .btn:hover:not(:disabled){background:var(--surface-2); border-color:var(--ink-4)}
 .btn:active:not(:disabled){transform:translateY(.5px)}
+@media (pointer:coarse){.btn:active:not(:disabled){transform:scale(.985)}}
 .btn:disabled{opacity:.45; cursor:not-allowed}
 .btn svg{width:15px; height:15px; flex:none}
 .btn-primary{background:var(--accent-fill); border-color:var(--accent-fill); color:var(--on-accent); box-shadow:var(--e1)}
@@ -243,7 +254,7 @@ transition:border-color var(--d2) var(--ease), box-shadow var(--d2) var(--ease);
 .dd-trigger.dd-sm{height:30px; font-size:var(--t-sm); min-width:96px; padding:0 var(--s2); border-radius:var(--r1)}
 .dd-panel{
 position:absolute; z-index:70; top:calc(100% + 5px); inset-inline-start:0; min-width:100%; max-width:340px;
-max-height:290px; overflow:auto; padding:var(--s1);
+max-height:290px; overflow:auto; padding:var(--s1); overscroll-behavior:contain;
 background:var(--surface); border:1px solid var(--line-2); border-radius:var(--r2); box-shadow:var(--e3);
 animation:pop var(--d2) var(--ease-out);
 }
@@ -266,10 +277,11 @@ background:transparent; color:var(--ink); font-size:var(--t-md); text-align:star
 display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 11px; border-radius:var(--r-pill);
 border:1px solid var(--line-2); background:var(--surface); color:var(--ink-2);
 font-size:var(--t-sm); font-weight:500; cursor:pointer; white-space:nowrap;
-transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease), color var(--d2) var(--ease);
+transform:scale(1);
+transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease), color var(--d2) var(--ease), transform var(--d2) cubic-bezier(.34,1.56,.64,1);
 }
 .chip:hover{border-color:var(--ink-4); background:var(--surface-2)}
-.chip[aria-pressed="true"]{background:var(--accent-wash); border-color:var(--accent-line); color:var(--accent-ink)}
+.chip[aria-pressed="true"]{background:var(--accent-wash); border-color:var(--accent-line); color:var(--accent-ink); transform:scale(1.05)}
 .chip-count{font-size:11px; color:var(--ink-4); font-variant-numeric:tabular-nums}
 .chip[aria-pressed="true"] .chip-count{color:var(--accent-ink); opacity:.75}
 .chip-x{width:12px; height:12px; opacity:.6}
@@ -321,7 +333,8 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease),
 .meter-target{position:absolute; top:-3px; width:2px; height:12px; background:var(--ink-2); border-radius:1px; opacity:.55}
 .meter-legend{display:flex; justify-content:space-between; gap:var(--s2); margin-top:6px; font-size:var(--t-xs); color:var(--ink-3)}
 
-.table-wrap{position:relative; overflow:auto; border-radius:var(--r2); border:1px solid var(--line)}
+.table-frame{position:relative}
+.table-wrap{position:relative; overflow:auto; border-radius:var(--r2); border:1px solid var(--line); overscroll-behavior:contain}
 .table-wrap.h-md{max-height:520px}
 .table-wrap.h-lg{max-height:640px}
 .table-wrap::-webkit-scrollbar{height:9px; width:9px}
@@ -331,7 +344,7 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease),
 .table-wrap{scrollbar-width:thin; scrollbar-color:var(--line-2) transparent}
 .scroll-shadow{position:absolute; inset-block:0; width:28px; pointer-events:none; opacity:0; transition:opacity var(--d2) var(--ease); z-index:5}
 .scroll-shadow-end{inset-inline-end:0; background:linear-gradient(to right, var(--surface) 0%, transparent 100%)}
-.table-wrap.can-scroll-end .scroll-shadow-end{opacity:1}
+.table-wrap.can-scroll-end ~ .scroll-shadow-end{opacity:1}
 table.dt{width:100%; border-collapse:separate; border-spacing:0; font-size:var(--t-md); background:var(--surface)}
 table.dt.dt-fixed{table-layout:fixed}
 table.dt thead th:first-child{inset-inline-start:0; z-index:3; transition:box-shadow var(--d2) var(--ease)}
@@ -405,11 +418,12 @@ background:var(--surface); border:1px solid var(--line-2); border-radius:var(--r
 animation:rise var(--d3) var(--ease-out);
 }
 @keyframes rise{from{opacity:0; transform:translateY(10px) scale(.99)}to{opacity:1; transform:none}}
+@keyframes sheet-rise{from{transform:translateY(100%)}to{transform:translateY(0)}}
 .modal-lg{width:min(940px,100%)}
 .modal-head{display:flex; align-items:flex-start; justify-content:space-between; gap:var(--s4); padding:var(--s5) var(--s5) var(--s4)}
 .modal-title{font-size:var(--t-xl)}
 .modal-sub{margin-top:4px; font-size:var(--t-sm); color:var(--ink-3)}
-.modal-body{flex:1 1 auto; overflow:auto; padding:0 var(--s5) var(--s5)}
+.modal-body{flex:1 1 auto; overflow:auto; padding:0 var(--s5) var(--s5); overscroll-behavior:contain}
 .modal-foot{display:flex; align-items:center; justify-content:space-between; gap:var(--s3); flex-wrap:wrap; padding:var(--s4) var(--s5); border-top:1px solid var(--line-3); background:var(--surface-2); border-radius:0 0 var(--r4) var(--r4)}
 
 .settings-shell{display:grid; grid-template-columns:210px 1fr; min-height:440px}
@@ -470,6 +484,17 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease);
 @keyframes mount{from{opacity:0; transform:translateY(6px)}to{opacity:1; transform:none}}
 .mount-1{animation-delay:24ms}.mount-2{animation-delay:48ms}.mount-3{animation-delay:72ms}.mount-4{animation-delay:96ms}
 .mount-5{animation-delay:120ms}.mount-6{animation-delay:144ms}.mount-7{animation-delay:168ms}.mount-8{animation-delay:192ms}
+.mount-9{animation-delay:216ms}.mount-10{animation-delay:240ms}.mount-11{animation-delay:264ms}.mount-12{animation-delay:288ms}
+
+@supports (view-transition-name:none){
+::view-transition-old(root){animation:vt-out var(--d3) var(--ease) both}
+::view-transition-new(root){animation:vt-in var(--d3) var(--ease-out) both}
+}
+@keyframes vt-out{to{opacity:0; transform:translateX(calc(var(--vt-dir,1) * -8px))}}
+@keyframes vt-in{from{opacity:0; transform:translateX(calc(var(--vt-dir,1) * 8px))}to{opacity:1; transform:none}}
+
+tr.flash-update{animation:row-flash calc(var(--d4) * 1.5) var(--ease-out)}
+@keyframes row-flash{from{background:var(--accent-wash)}to{background:transparent}}
 
 .grid-2{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--s4)}
 .grid-3{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--s4)}
@@ -477,6 +502,7 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease);
 .dash-grid{display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:var(--s4)}
 .col-4{grid-column:span 4} .col-5{grid-column:span 5} .col-6{grid-column:span 6}
 .col-7{grid-column:span 7} .col-8{grid-column:span 8} .col-12{grid-column:1 / -1}
+.btn,.chip,.step-pill,.dd-trigger,.check,.pager-btn{touch-action:manipulation; -webkit-tap-highlight-color:transparent}
 @media (max-width:1080px){
 .grid-3,.dash-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 .col-4,.col-5,.col-6,.col-7,.col-8{grid-column:span 2}
@@ -484,10 +510,13 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease);
 .settings-rail{flex-direction:row; overflow:auto; border-inline-end:0; border-bottom:1px solid var(--line-3); border-radius:0}
 .rail-btn{white-space:nowrap}
 }
+@media (min-width:761px) and (max-width:900px){
+.brand-text{display:none}
+}
 @media (max-width:760px){
 :root{--nav-h:auto}
 .shell{padding:0 var(--s3) var(--s7); padding-left:calc(var(--s3) + env(safe-area-inset-left)); padding-right:calc(var(--s3) + env(safe-area-inset-right))}
-.topbar{position:sticky; top:0; height:auto; padding:calc(var(--s2) + env(safe-area-inset-top)) var(--s3) var(--s2)}
+.topbar{position:sticky; top:0; height:auto; padding:calc(var(--s2) + env(safe-area-inset-top)) var(--s3) var(--s2); padding-left:calc(var(--s3) + env(safe-area-inset-left)); padding-right:calc(var(--s3) + env(safe-area-inset-right))}
 .topbar-inner{display:grid; grid-template-columns:1fr auto; grid-template-areas:"brand actions" "steps steps"; align-items:center; gap:var(--s2)}
 .brand{grid-area:brand}
 .topbar-steps{grid-area:steps}
@@ -512,15 +541,19 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease);
 .chip-row-scroll .chip{flex:0 0 auto}
 .table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch}
 .table-wrap.h-md,.table-wrap.h-lg{max-height:none}
+table.dt thead th{top:var(--topbar-h,0px)}
+table.dt tfoot td,table.dt tfoot td:first-child{position:static}
 table.dt.dt-wide{min-width:980px}
 table.dt thead th,table.dt tbody td{padding:10px var(--s2)}
 .pager{flex-direction:column; align-items:stretch; gap:var(--s2)}
 .pager-list{justify-content:center; flex-wrap:wrap}
 .pager-btn{min-width:38px; min-height:38px}
 .modal-scrim{padding:0; place-items:stretch}
-.modal{width:100%; max-width:none; max-height:100vh; height:100vh; max-height:100dvh; height:100dvh; border-radius:0}
+.modal{width:100%; max-width:none; max-height:100vh; height:100vh; max-height:100dvh; height:100dvh; border-radius:0; animation:sheet-rise var(--d3) var(--ease-out)}
 .dd-panel{max-width:none; max-height:60vh}
 .modal-head,.modal-body,.modal-foot{padding-inline:var(--s4)}
+.modal-head{padding-top:calc(var(--s5) + env(safe-area-inset-top))}
+.modal-foot{padding-bottom:calc(var(--s4) + env(safe-area-inset-bottom))}
 .modal-foot{flex-direction:column-reverse; align-items:stretch; gap:var(--s2)}
 .modal-foot .btn{width:100%}
 .settings-rail{gap:var(--s1)}
@@ -537,7 +570,7 @@ table.dt thead th,table.dt tbody td{padding:10px var(--s2)}
 .check{align-items:flex-start}
 .check-box{width:20px; height:20px; margin-top:2px}
 .upload{padding:var(--s6) var(--s4)}
-.toasts{inset-inline:var(--s3); max-width:none; inset-block-end:calc(var(--s3) + env(safe-area-inset-bottom))}
+.toasts{max-width:none; inset-inline-start:calc(var(--s3) + env(safe-area-inset-right)); inset-inline-end:calc(var(--s3) + env(safe-area-inset-left)); inset-block-end:calc(var(--s3) + env(safe-area-inset-bottom))}
 .nav-foot{flex-direction:column-reverse}
 .nav-foot .btn{width:100%}
 }
@@ -574,6 +607,7 @@ a[href]{text-decoration:none; color:inherit}
 }
 @media (prefers-reduced-motion:reduce){
 *,*::before,*::after{animation-duration:1ms !important; animation-iteration-count:1 !important; transition-duration:1ms !important; scroll-behavior:auto !important}
+::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none !important}
 }
 </style>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" onerror="window.__sheetJsLoadFailed=true"></script>
@@ -1717,7 +1751,7 @@ var UI = (function () {
     var i = el('input', 'input' + (opts.size === 'sm' ? ' input-sm' : '') + (opts.numeric ? ' num-input' : '') + (opts.cls ? ' ' + opts.cls : ''));
     i.id = opts.id || nextId('in');
     i.type = opts.grouped ? 'text' : (opts.type || 'text');
-    if (opts.grouped) i.setAttribute('inputmode', 'decimal');
+    if (opts.numeric) i.setAttribute('inputmode', 'decimal');
     if (opts.value != null) i.value = opts.grouped ? Fmt.groupDigits(opts.value) : opts.value;
     if (opts.placeholder) i.placeholder = opts.placeholder;
     if (opts.min != null) i.min = String(opts.min);
@@ -1770,7 +1804,7 @@ var UI = (function () {
     if (p.onClose) p.onClose();
   }
 
-  document.addEventListener('mousedown', function (e) {
+  document.addEventListener('pointerdown', function (e) {
     if (!openPanel) return;
     if (openPanel.panel.contains(e.target) || openPanel.trigger.contains(e.target)) return;
     closeOpenPanel();
@@ -1788,6 +1822,7 @@ var UI = (function () {
     var wrap = el('div', 'dd');
     var trigger = el('button', 'dd-trigger' + (opts.size === 'sm' ? ' dd-sm' : ''));
     trigger.type = 'button';
+    if (opts.id) trigger.id = opts.id;
     trigger.setAttribute('aria-haspopup', 'listbox');
     trigger.setAttribute('aria-expanded', 'false');
     if (opts.ariaLabel) trigger.setAttribute('aria-label', opts.ariaLabel);
@@ -1999,6 +2034,7 @@ var UI = (function () {
   }
 
   var openModals = [];
+  var bodyOverflowBefore = '';
   function modal(opts) {
     var scrim = el('div', 'modal-scrim');
     var box = el('div', 'modal' + (opts.wide ? ' modal-lg' : ''));
@@ -2032,6 +2068,9 @@ var UI = (function () {
       if (i >= 0) openModals.splice(i, 1);
       if (scrim.parentNode) scrim.parentNode.removeChild(scrim);
       document.removeEventListener('keydown', onKey, true);
+      if (!openModals.length) {
+        document.body.style.overflow = bodyOverflowBefore;
+      }
       if (lastFocus && lastFocus.focus) lastFocus.focus();
       if (opts.onClose) opts.onClose();
     }
@@ -2045,13 +2084,23 @@ var UI = (function () {
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
-    scrim.addEventListener('mousedown', function (e) { if (e.target === scrim && opts.dismissable !== false) close(); });
+    scrim.addEventListener('pointerdown', function (e) { if (e.target === scrim && opts.dismissable !== false) close(); });
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(scrim);
 
     var handle = { scrim: scrim, box: box, body: body, foot: foot, close: close };
+    if (!openModals.length) {
+      bodyOverflowBefore = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
     openModals.push(handle);
+    var coarsePointer = window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
     setTimeout(function () {
+      if (coarsePointer) {
+        box.setAttribute('tabindex', '-1');
+        box.focus();
+        return;
+      }
       var f = box.querySelector('input:not(:disabled), button.btn-primary, button');
       if (f) f.focus();
     }, 30);
@@ -2070,18 +2119,38 @@ var UI = (function () {
   }
 
   var tipEl = null;
+  var tipAnchor = null;
+  var tipObserver = null;
+  function ensureTipObserver() {
+    if (tipObserver || typeof MutationObserver === 'undefined') return;
+    tipObserver = new MutationObserver(function () {
+      if (tipEl && tipAnchor && !tipAnchor.isConnected) dismissTip();
+    });
+    tipObserver.observe(document.body, { childList: true, subtree: true });
+  }
+  function dismissTip() {
+    if (tipEl) { tipEl.remove(); tipEl = null; }
+    tipAnchor = null;
+  }
+  document.addEventListener('scroll', dismissTip, { passive: true, capture: true });
+  document.addEventListener('pointerdown', dismissTip, { passive: true });
+
   function attachTip(node, text) {
     if (!text) return node;
+    var coarse = window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
+    if (coarse) return node;
     node.addEventListener('mouseenter', function () {
-      if (tipEl) tipEl.remove();
+      dismissTip();
       tipEl = el('div', 'tooltip', text);
+      tipAnchor = node;
       document.body.appendChild(tipEl);
+      ensureTipObserver();
       var r = node.getBoundingClientRect();
       var tr = tipEl.getBoundingClientRect();
       tipEl.style.top = Math.max(6, r.top - tr.height - 7) + 'px';
       tipEl.style.left = Math.max(6, Math.min(window.innerWidth - tr.width - 6, r.left + r.width / 2 - tr.width / 2)) + 'px';
     });
-    node.addEventListener('mouseleave', function () { if (tipEl) { tipEl.remove(); tipEl = null; } });
+    node.addEventListener('mouseleave', function () { if (tipAnchor === node) dismissTip(); });
     return node;
   }
 
@@ -2802,7 +2871,30 @@ var Exporter = (function () {
   }
 
   function write(wb, filename) {
+    if (tryShareWrite(wb, filename)) return;
+    var anchorSupported = (function () {
+      try { return typeof document.createElement('a').download !== 'undefined'; }
+      catch (e) { return false; }
+    })();
+    if (!anchorSupported) {
+      if (typeof UI !== 'undefined' && UI.toast) UI.toast('تعذّر تنزيل الملف على هذا الجهاز', 'danger');
+      return;
+    }
     XLSX.writeFile(wb, filename, { bookType: 'xlsx', compression: true });
+  }
+
+  function tryShareWrite(wb, filename) {
+    if (typeof navigator === 'undefined' || !navigator.canShare || !navigator.share || typeof File === 'undefined') return false;
+    try {
+      var arr = XLSX.write(wb, { bookType: 'xlsx', compression: true, type: 'array' });
+      var blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      var file = new File([blob], filename, { type: blob.type });
+      if (!navigator.canShare({ files: [file] })) return false;
+      navigator.share({ files: [file] }).catch(function () {});
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   function available() {
@@ -2963,6 +3055,10 @@ var App = (function () {
   var hosts = {};
   var searchTimer = null;
   var bootAt = Date.now();
+  var topbarResizeObserver = null;
+  var kpiAnimatedNet = null;
+  var recomputeDebounceTimer = null;
+  var tableFirstPaintDone = false;
 
   var SCREENS = [
     { key: 'upload', label: 'الملف', icon: 'upload' },
@@ -3015,7 +3111,7 @@ var App = (function () {
       selection: {},
       undoStack: [],
       redoStack: [],
-      ui: { density: 'normal', rowsPerPage: 100, kpiAnimated: false, tableDetail: 'simple', theme: 'system' },
+      ui: { density: 'normal', rowsPerPage: (typeof window !== 'undefined' && window.innerWidth && window.innerWidth < 760) ? 50 : 100, tableDetail: 'simple', theme: 'system' },
       __recomputeCount: 0,
       __searchIndex: null,
       __searchIndexFor: null,
@@ -3068,6 +3164,21 @@ var App = (function () {
     state.__searchIndex = null;
     scheduleSave();
     return state.result;
+  }
+
+  function recomputeDebounced(after) {
+    if (recomputeDebounceTimer) { clearTimeout(recomputeDebounceTimer); recomputeDebounceTimer = null; }
+    recomputeDebounceTimer = setTimeout(function () {
+      recomputeDebounceTimer = null;
+      recompute();
+      if (after) after();
+    }, 150);
+  }
+
+  function recomputeNow(after) {
+    if (recomputeDebounceTimer) { clearTimeout(recomputeDebounceTimer); recomputeDebounceTimer = null; }
+    recompute();
+    if (after) after();
   }
 
   function resultIndex() {
@@ -3180,9 +3291,16 @@ var App = (function () {
   }
 
   function goto(screen) {
+    var fromIdx = SCREENS.findIndex(function (s) { return s.key === state.screen; });
+    var toIdx = SCREENS.findIndex(function (s) { return s.key === screen; });
     state.screen = screen;
     UI.closePanel();
-    render('all');
+    if (document.startViewTransition) {
+      document.documentElement.style.setProperty('--vt-dir', toIdx >= fromIdx ? '1' : '-1');
+      document.startViewTransition(function () { render('all'); });
+    } else {
+      render('all');
+    }
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
 
@@ -3265,8 +3383,10 @@ var App = (function () {
     var brand = el('div', 'brand');
     var mark = Icons.brandMark();
     if (Date.now() - bootAt < 1500) {
-      mark.classList.add('lift');
-      setTimeout(function () { mark.classList.remove('lift'); }, 60);
+      mark.classList.add('boot-reveal');
+      mark.addEventListener('animationend', function () {
+        mark.classList.remove('boot-reveal');
+      }, { once: true });
     }
     brand.appendChild(mark);
     var bt = el('div', 'brand-text');
@@ -3296,10 +3416,20 @@ var App = (function () {
     hosts.themeBtn = UI.iconBtn(THEME_ICON[Theme.resolve()], 'المظهر', openThemeMenu, 'sm');
     paintThemeBtn();
     actions.appendChild(hosts.themeBtn);
-    actions.appendChild(btn('الإعدادات', { icon: 'settings', variant: 'ghost', size: 'sm', onClick: openSettings }));
+    actions.appendChild(UI.iconBtn('settings', 'الإعدادات', openSettings, 'sm'));
     inner.appendChild(actions);
     bar.appendChild(inner);
     hosts.root.appendChild(bar);
+    hosts.topbar = bar;
+    if (typeof ResizeObserver !== 'undefined') {
+      if (topbarResizeObserver) topbarResizeObserver.disconnect();
+      else topbarResizeObserver = new ResizeObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          document.documentElement.style.setProperty('--topbar-h', Math.round(entries[i].contentRect.height) + 'px');
+        }
+      });
+      topbarResizeObserver.observe(bar);
+    }
 
     var shell = el('div', 'shell');
     hosts.notices = el('div');
@@ -3321,11 +3451,12 @@ var App = (function () {
     clearNode(hosts.stepper);
     var wrap = el('div', 'stepper');
     var currentIdx = SCREENS.findIndex(function (s) { return s.key === state.screen; });
+    var currentPill = null;
     SCREENS.forEach(function (s, i) {
       var b = el('button', 'step-pill' + (i < currentIdx ? ' done' : ''));
       b.type = 'button';
       b.setAttribute('aria-label', (i + 1) + ' — ' + s.label);
-      if (s.key === state.screen) b.setAttribute('aria-current', 'step');
+      if (s.key === state.screen) { b.setAttribute('aria-current', 'step'); currentPill = b; }
       var dot = el('span', 'step-dot');
       if (i < currentIdx) dot.appendChild(Icons.svg('check'));
       else dot.appendChild(document.createTextNode(String(i + 1)));
@@ -3338,6 +3469,9 @@ var App = (function () {
       wrap.appendChild(b);
     });
     hosts.stepper.appendChild(wrap);
+    if (currentPill && currentPill.scrollIntoView) {
+      currentPill.scrollIntoView({ inline: 'center', block: 'nearest' });
+    }
   }
 
   function renderNotices() {
@@ -3371,8 +3505,18 @@ var App = (function () {
   function renderScreen() {
     if (!hosts.screen) return;
     var snap = captureFocus();
+    hosts.amountsSummary = null;
+    hosts.gridHost = null;
+    hosts.gridBody = null;
+    hosts.kpis = null;
+    hosts.poolsHost = null;
+    hosts.chartsHost = null;
+    hosts.toolbar = null;
+    hosts.chips = null;
+    hosts.table = null;
+    hosts.count = null;
     clearNode(hosts.screen);
-    hosts.screen.appendChild(el('h1', 'sr-only', APP_NAME + ' — ' + APP_TAGLINE));
+    hosts.screen.appendChild(el('div', 'sr-only', APP_NAME + ' — ' + APP_TAGLINE));
     var view;
     if (state.screen === 'upload') view = screenUpload();
     else if (state.screen === 'map') view = screenMap();
@@ -3423,7 +3567,7 @@ var App = (function () {
 
     var fileInput = el('input');
     fileInput.type = 'file';
-    fileInput.accept = '.xlsx,.xls,.csv';
+    fileInput.accept = '.xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv';
     fileInput.style.display = 'none';
     fileInput.addEventListener('change', function () {
       if (fileInput.files && fileInput.files[0]) handleFile(fileInput.files[0]);
@@ -3557,7 +3701,7 @@ var App = (function () {
       goto('map');
       UI.toast('تم تحميل ' + Fmt.int(state.rawRows.length) + ' صف — راجع ربط الأعمدة', 'ok');
     };
-    if (isCsv) reader.readAsArrayBuffer(file); else reader.readAsArrayBuffer(file);
+    reader.readAsArrayBuffer(file);
   }
 
   var FIELDS = Importer.FIELDS;
@@ -3712,8 +3856,12 @@ var App = (function () {
         onInput: function (v) {
           var n = Fmt.parseNumber(v);
           state.pools[name].gross = n == null ? 0 : n;
-          recompute();
-          renderAmountsSummary();
+          recomputeDebounced(renderAmountsSummary);
+        },
+        onChange: function (v) {
+          var n = Fmt.parseNumber(v);
+          state.pools[name].gross = n == null ? 0 : n;
+          recomputeNow(renderAmountsSummary);
         }
       });
       fields.appendChild(UI.field('الإجمالي (ج.م)', grossIn));
@@ -3724,8 +3872,13 @@ var App = (function () {
           var n = Fmt.parseNumber(v);
           var rate = n == null ? 0 : Engine.clamp(n / 100, 0, 0.9999);
           state.pools[name].taxRate = rate;
-          recompute();
-          renderAmountsSummary();
+          recomputeDebounced(renderAmountsSummary);
+        },
+        onChange: function (v) {
+          var n = Fmt.parseNumber(v);
+          var rate = n == null ? 0 : Engine.clamp(n / 100, 0, 0.9999);
+          state.pools[name].taxRate = rate;
+          recomputeNow(renderAmountsSummary);
         }
       });
       fields.appendChild(UI.field('الخصم (%)', taxIn));
@@ -3750,8 +3903,12 @@ var App = (function () {
       onInput: function (v) {
         var n = Fmt.parseNumber(v);
         state.periodDays = (n == null || n < 1) ? 1 : Math.round(n);
-        recompute();
-        renderAmountsSummary();
+        recomputeDebounced(renderAmountsSummary);
+      },
+      onChange: function (v) {
+        var n = Fmt.parseNumber(v);
+        state.periodDays = (n == null || n < 1) ? 1 : Math.round(n);
+        recomputeNow(renderAmountsSummary);
       }
     });
     sb.appendChild(UI.field('عدد أيام الفترة', daysIn, 'يُستخدم لحساب نسبة الحضور لمن عمل أيامًا ناقصة.'));
@@ -4027,7 +4184,8 @@ var App = (function () {
 
   function pushUndo(label) {
     state.undoStack.push({ label: label, people: JSON.parse(JSON.stringify(state.people)) });
-    if (state.undoStack.length > 40) state.undoStack.shift();
+    var cap = Math.max(5, Math.min(40, Math.floor(400000 / Math.max(1, state.people.length))));
+    while (state.undoStack.length > cap) state.undoStack.shift();
     state.redoStack = [];
   }
 
@@ -4217,6 +4375,9 @@ var App = (function () {
       slice = rows.slice((state.page.grid - 1) * per, (state.page.grid - 1) * per + per);
     }
     var snap = captureFocus();
+    var prevWrap = hosts.gridBody.querySelector('.table-wrap');
+    var prevScrollLeft = prevWrap ? prevWrap.scrollLeft : 0;
+    var prevScrollTop = prevWrap ? prevWrap.scrollTop : 0;
     clearNode(hosts.gridBody);
 
     if (!rows.length) {
@@ -4250,6 +4411,7 @@ var App = (function () {
     slice.forEach(function (p) {
       var r = rmap[p.id] || {};
       var tr = el('tr');
+      tr.setAttribute('data-row-id', String(p.id));
       if (r.unresolvedTier) tr.className = 'is-orphan';
       else if (p.excluded) tr.className = 'is-excluded';
       else if (Reports.isSpecial(p)) tr.className = 'is-special';
@@ -4275,6 +4437,8 @@ var App = (function () {
     t.appendChild(tb);
     tw.appendChild(t);
     hosts.gridBody.appendChild(tw);
+    tw.scrollLeft = prevScrollLeft;
+    tw.scrollTop = prevScrollTop;
 
     if (pages > 1) hosts.gridBody.appendChild(pager(state.page.grid, pages, rows.length, function (p) {
       state.page.grid = p;
@@ -4289,7 +4453,41 @@ var App = (function () {
     pushUndo(label || ('تعديل ' + (p.name || p.id)));
     p[field] = value;
     recompute();
-    renderGridBody();
+    if (!patchGridRow(p)) renderGridBody();
+  }
+
+  function patchGridRow(p) {
+    if (!hosts.gridBody) return false;
+    var tr = hosts.gridBody.querySelector('tr[data-row-id="' + p.id + '"]');
+    if (!tr) return false;
+    var rows = gridRows();
+    var per = state.ui.rowsPerPage;
+    var pages = Math.max(1, Math.ceil(rows.length / per));
+    var page = Math.min(state.page.grid, pages);
+    var from = (page - 1) * per;
+    var slice = rows.slice(from, from + per);
+    var stillVisible = false;
+    for (var i = 0; i < slice.length; i++) {
+      if (slice[i].id === p.id) { stillVisible = true; break; }
+    }
+    if (!stillVisible) return false;
+    var rmap = resultIndex();
+    var r = rmap[p.id] || {};
+    var cls = '';
+    if (r.unresolvedTier) cls = 'is-orphan';
+    else if (p.excluded) cls = 'is-excluded';
+    else if (Reports.isSpecial(p)) cls = 'is-special';
+    tr.classList.remove('is-orphan', 'is-excluded', 'is-special', 'flash-update');
+    if (cls) tr.classList.add(cls);
+    var net = tr.lastElementChild;
+    if (!net) return false;
+    clearNode(net);
+    if (r.unresolvedTier) net.appendChild(UI.badge('بدون فئة', 'danger'));
+    else if (p.excluded) net.appendChild(UI.badge('مستبعد', 'neutral'));
+    else net.appendChild(UI.money(r.netPiastres || 0));
+    void tr.offsetWidth;
+    tr.classList.add('flash-update');
+    return true;
   }
 
   function gridCell(p, f, tierNames, poolNames) {
@@ -4313,6 +4511,7 @@ var App = (function () {
         opts.push({ value: currentVal, label: currentVal + ' (غير معرّفة)' });
       }
       var dd = UI.dropdown({
+        id: idBase,
         options: opts, value: currentVal, size: 'sm',
         ariaLabel: f.label + ' لـ ' + (p.name || p.id),
         onChange: function (v) {
@@ -4390,7 +4589,7 @@ var App = (function () {
         { value: 'notes', label: 'ملاحظات' }
       ],
       value: fieldKey,
-      onChange: function (v) { fieldKey = v; paintValue(); }
+      onChange: function (v) { fieldKey = v; paintValue(); paintOnlyEmpty(); }
     });
     fieldDd.firstChild.style.width = '100%';
     body.appendChild(UI.field('الحقل', fieldDd));
@@ -4424,10 +4623,20 @@ var App = (function () {
     }
     paintValue();
 
-    body.appendChild(UI.checkbox({
-      label: 'الخلايا الفارغة فقط (لا تستبدل قيمة موجودة)', checked: onlyEmpty,
-      onChange: function (v) { onlyEmpty = v; }
-    }));
+    var onlyEmptyHost = el('div');
+    body.appendChild(onlyEmptyHost);
+    function paintOnlyEmpty() {
+      clearNode(onlyEmptyHost);
+      if (fieldKey === 'excluded' || fieldKey === 'tier' || fieldKey === 'pinnedPool') {
+        onlyEmpty = false;
+        return;
+      }
+      onlyEmptyHost.appendChild(UI.checkbox({
+        label: 'الخلايا الفارغة فقط (لا تستبدل قيمة موجودة)', checked: onlyEmpty,
+        onChange: function (v) { onlyEmpty = v; }
+      }));
+    }
+    paintOnlyEmpty();
     body.appendChild(UI.notice({
       tone: 'accent',
       text: 'التعديل الجماعي يُسجَّل كخطوة واحدة في التراجع، فيمكنك التراجع عنه بالكامل بنقرة واحدة.'
@@ -4581,13 +4790,13 @@ var App = (function () {
 
     var netNode = el('span', 'money money-xl');
     grid.appendChild(kpiCard('الصافي الموزّع', netNode, 'على ' + Fmt.int(paid) + ' مستحق من ' + Fmt.int(rows.length) + ' شخص', null, 'coins'));
-    if (state.ui.kpiAnimated) {
+    if (kpiAnimatedNet === tot.totalNet) {
       var parts = Fmt.splitMoney(tot.totalNet);
       netNode.appendChild(el('span', 'money-int', parts.int));
       netNode.appendChild(el('span', 'money-frac', parts.frac));
     } else {
       UI.countUp(netNode, tot.totalNet);
-      state.ui.kpiAnimated = true;
+      kpiAnimatedNet = tot.totalNet;
     }
 
     grid.appendChild(kpiCard('إجمالي الخصومات', UI.moneyEGP(tot.totalTax, { size: 'lg' }),
@@ -4617,6 +4826,7 @@ var App = (function () {
     hosts.kpis.appendChild(grid);
   }
 
+  var poolMeterWidths = Object.create(null);
   function renderPools() {
     if (!hosts.poolsHost) return;
     clearNode(hosts.poolsHost);
@@ -4660,7 +4870,8 @@ var App = (function () {
         var track = el('div', 'meter-track');
         var fill = el('div', 'meter-fill ' + tone);
         var pctFill = Math.min(100, (p.actualWeight / Math.max(p.targetWeight, 1e-9)) * 100);
-        fill.style.width = Math.max(2, Math.min(100, pctFill)) + '%';
+        var targetMeterWidth = Math.max(2, Math.min(100, pctFill));
+        if (poolMeterWidths[p.name] != null) fill.style.width = poolMeterWidths[p.name] + '%';
         track.appendChild(fill);
         var marker = el('div', 'meter-target');
         marker.style.insetInlineStart = 'calc(100% - 1px)';
@@ -4672,6 +4883,10 @@ var App = (function () {
         legend.appendChild(el('span', null, 'المستهدف ' + Fmt.egp(p.targetWeight, 0)));
         meter.appendChild(legend);
         block.appendChild(meter);
+        requestAnimationFrame(function () {
+          fill.style.width = targetMeterWidth + '%';
+          poolMeterWidths[p.name] = targetMeterWidth;
+        });
       }
       body.appendChild(block);
     });
@@ -4697,6 +4912,7 @@ var App = (function () {
     hosts.chartsHost.appendChild(stack);
   }
 
+  var chartBarWidths = Object.create(null);
   function barChart(title, items) {
     var card = el('div', 'chart-card');
     card.appendChild(el('div', 'section-label', title));
@@ -4713,13 +4929,19 @@ var App = (function () {
       row.appendChild(nm);
       var track = el('div', 'chart-track');
       var bar = el('div', 'chart-bar' + (it.alt ? ' alt' : ''));
+      var barKey = title + '::' + (it.name || '');
+      var targetBarWidth = Math.max(1.5, (it.value / max) * 100);
+      if (chartBarWidths[barKey] != null) bar.style.width = chartBarWidths[barKey] + '%';
       track.appendChild(bar);
       row.appendChild(track);
       var val = el('div', 'chart-val');
       val.appendChild(UI.moneyEGP(it.value));
       row.appendChild(val);
       rows.appendChild(row);
-      requestAnimationFrame(function () { bar.style.width = Math.max(1.5, (it.value / max) * 100) + '%'; });
+      requestAnimationFrame(function () {
+        bar.style.width = targetBarWidth + '%';
+        chartBarWidths[barKey] = targetBarWidth;
+      });
     });
     card.appendChild(rows);
     return card;
@@ -4928,11 +5150,16 @@ var App = (function () {
     t.appendChild(thead);
 
     var tb = el('tbody');
-    slice.forEach(function (r) {
+    var staggerFirstPaint = !tableFirstPaintDone;
+    if (staggerFirstPaint) tableFirstPaintDone = true;
+    slice.forEach(function (r, rowIdx) {
       var tr = el('tr');
       if (r.unresolvedTier) tr.className = 'is-orphan';
       else if (r.excluded) tr.className = 'is-excluded';
       else if (r.special) tr.className = 'is-special';
+      if (staggerFirstPaint && rowIdx < 12) {
+        tr.className = (tr.className ? tr.className + ' ' : '') + 'mount mount-' + (rowIdx + 1);
+      }
 
       var nameTd = el('td', 'name-col');
       if (r.name) nameTd.title = r.name;
@@ -5701,8 +5928,12 @@ var App = (function () {
         onInput: function (v) {
           var n = Fmt.parseNumber(v);
           state.tiers[name] = n == null ? 0 : n;
-          recompute();
-          renderScreenIfMounted();
+          recomputeDebounced(renderScreenIfMounted);
+        },
+        onChange: function (v) {
+          var n = Fmt.parseNumber(v);
+          state.tiers[name] = n == null ? 0 : n;
+          recomputeNow(renderScreenIfMounted);
         }
       });
       right.appendChild(valIn);
@@ -5804,8 +6035,12 @@ var App = (function () {
       onInput: function (v) {
         var n = Fmt.parseNumber(v);
         state.periodDays = (n == null || n < 1) ? 1 : Math.round(n);
-        recompute();
-        renderScreenIfMounted();
+        recomputeDebounced(renderScreenIfMounted);
+      },
+      onChange: function (v) {
+        var n = Fmt.parseNumber(v);
+        state.periodDays = (n == null || n < 1) ? 1 : Math.round(n);
+        recomputeNow(renderScreenIfMounted);
       }
     }));
     pane.appendChild(r1);
@@ -5961,7 +6196,12 @@ var App = (function () {
       state.__restore = savedSession;
     }
     var printPrevDetail;
+    window.addEventListener('scroll', function () {
+      if (!hosts.topbar) return;
+      hosts.topbar.classList.toggle('is-elevated', window.scrollY > 8);
+    }, { passive: true });
     window.addEventListener('beforeprint', function () {
+      if (state.screen !== 'dashboard') return;
       printPrevDetail = state.ui.tableDetail;
       if (state.ui.tableDetail === 'full') {
         state.ui.tableDetail = 'simple';
@@ -5969,6 +6209,7 @@ var App = (function () {
       }
     });
     window.addEventListener('afterprint', function () {
+      if (state.screen !== 'dashboard') return;
       if (printPrevDetail !== undefined && printPrevDetail !== state.ui.tableDetail) {
         state.ui.tableDetail = printPrevDetail;
         renderTable();
@@ -6623,10 +6864,14 @@ var SelfTest = (function () {
   function enhance(tw) {
     if (tw.__scrollShadowBound) { updateShadowClasses(tw); return; }
     tw.__scrollShadowBound = true;
+    var frame = document.createElement('div');
+    frame.className = 'table-frame';
+    tw.parentNode.insertBefore(frame, tw);
+    frame.appendChild(tw);
     var endEl = document.createElement('div');
     endEl.className = 'scroll-shadow scroll-shadow-end';
     endEl.setAttribute('aria-hidden', 'true');
-    tw.appendChild(endEl);
+    frame.appendChild(endEl);
     tw.addEventListener('scroll', function () { updateShadowClasses(tw); }, { passive: true });
     updateShadowClasses(tw);
   }
