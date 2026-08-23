@@ -2872,6 +2872,10 @@ var Exporter = (function () {
 
   function write(wb, filename) {
     if (tryShareWrite(wb, filename)) return;
+    writeViaAnchor(wb, filename);
+  }
+
+  function writeViaAnchor(wb, filename) {
     var anchorSupported = (function () {
       try { return typeof document.createElement('a').download !== 'undefined'; }
       catch (e) { return false; }
@@ -2890,7 +2894,10 @@ var Exporter = (function () {
       var blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       var file = new File([blob], filename, { type: blob.type });
       if (!navigator.canShare({ files: [file] })) return false;
-      navigator.share({ files: [file] }).catch(function () {});
+      navigator.share({ files: [file] }).catch(function (err) {
+        if (err && err.name === 'AbortError') return;
+        writeViaAnchor(wb, filename);
+      });
       return true;
     } catch (e) {
       return false;
