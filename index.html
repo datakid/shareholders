@@ -486,9 +486,11 @@ transition:background var(--d2) var(--ease), border-color var(--d2) var(--ease);
 .mount-5{animation-delay:120ms}.mount-6{animation-delay:144ms}.mount-7{animation-delay:168ms}.mount-8{animation-delay:192ms}
 .mount-9{animation-delay:216ms}.mount-10{animation-delay:240ms}.mount-11{animation-delay:264ms}.mount-12{animation-delay:288ms}
 
+main#main{view-transition-name:app-screen}
 @supports (view-transition-name:none){
-::view-transition-old(root){animation:vt-out var(--d3) var(--ease) both}
-::view-transition-new(root){animation:vt-in var(--d3) var(--ease-out) both}
+::view-transition-old(root),::view-transition-new(root){animation:none}
+::view-transition-old(app-screen){animation:vt-out var(--d3) var(--ease) both}
+::view-transition-new(app-screen){animation:vt-in var(--d3) var(--ease-out) both}
 }
 @keyframes vt-out{to{opacity:0; transform:translateX(calc(var(--vt-dir,1) * -8px))}}
 @keyframes vt-in{from{opacity:0; transform:translateX(calc(var(--vt-dir,1) * 8px))}to{opacity:1; transform:none}}
@@ -3298,11 +3300,12 @@ var App = (function () {
     var toIdx = SCREENS.findIndex(function (s) { return s.key === screen; });
     state.screen = screen;
     UI.closePanel();
+    function update() { renderStepper(); renderScreen(); }
     if (document.startViewTransition) {
       document.documentElement.style.setProperty('--vt-dir', toIdx >= fromIdx ? '1' : '-1');
-      document.startViewTransition(function () { render('all'); });
+      document.startViewTransition(update);
     } else {
-      render('all');
+      update();
     }
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
@@ -3401,6 +3404,7 @@ var App = (function () {
     inner.appendChild(brand);
 
     hosts.stepper = el('div', 'topbar-steps');
+    hosts.stepperPills = null;
     inner.appendChild(hosts.stepper);
     inner.appendChild(el('div', 'topbar-spacer'));
 
@@ -3451,29 +3455,51 @@ var App = (function () {
     restoreFocus(snap);
   }
 
+  function buildStepPill(s, i) {
+    var b = el('button', 'step-pill');
+    b.type = 'button';
+    b.setAttribute('aria-label', (i + 1) + ' — ' + s.label);
+    b.appendChild(el('span', 'step-dot'));
+    b.appendChild(el('span', null, s.label));
+    b.addEventListener('click', function () { goto(s.key); });
+    return b;
+  }
+
+  function updateStepPill(b, s, i, currentIdx) {
+    var done = i < currentIdx;
+    b.classList.toggle('done', done);
+    if (i === currentIdx) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+    if (b.dataset.done !== String(done)) {
+      b.dataset.done = String(done);
+      var dot = b.firstChild;
+      clearNode(dot);
+      if (done) dot.appendChild(Icons.svg('check'));
+      else dot.appendChild(document.createTextNode(String(i + 1)));
+    }
+    var locked = i > 0 && !canLeaveUpload();
+    b.disabled = locked;
+    if (locked) b.title = 'ارفع ملفًا أولًا'; else b.removeAttribute('title');
+  }
+
   function renderStepper() {
     if (!hosts.stepper) return;
-    clearNode(hosts.stepper);
-    var wrap = el('div', 'stepper');
     var currentIdx = SCREENS.findIndex(function (s) { return s.key === state.screen; });
+    if (!hosts.stepperPills) {
+      clearNode(hosts.stepper);
+      var wrap = el('div', 'stepper');
+      hosts.stepperPills = SCREENS.map(function (s, i) {
+        var b = buildStepPill(s, i);
+        wrap.appendChild(b);
+        return b;
+      });
+      hosts.stepper.appendChild(wrap);
+    }
     var currentPill = null;
     SCREENS.forEach(function (s, i) {
-      var b = el('button', 'step-pill' + (i < currentIdx ? ' done' : ''));
-      b.type = 'button';
-      b.setAttribute('aria-label', (i + 1) + ' — ' + s.label);
-      if (s.key === state.screen) { b.setAttribute('aria-current', 'step'); currentPill = b; }
-      var dot = el('span', 'step-dot');
-      if (i < currentIdx) dot.appendChild(Icons.svg('check'));
-      else dot.appendChild(document.createTextNode(String(i + 1)));
-      b.appendChild(dot);
-      b.appendChild(el('span', null, s.label));
-      var locked = i > 0 && !canLeaveUpload();
-      b.disabled = locked;
-      if (locked) b.title = 'ارفع ملفًا أولًا';
-      b.addEventListener('click', function () { goto(s.key); });
-      wrap.appendChild(b);
+      var b = hosts.stepperPills[i];
+      updateStepPill(b, s, i, currentIdx);
+      if (i === currentIdx) currentPill = b;
     });
-    hosts.stepper.appendChild(wrap);
     if (currentPill && currentPill.scrollIntoView) {
       currentPill.scrollIntoView({ inline: 'center', block: 'nearest' });
     }
