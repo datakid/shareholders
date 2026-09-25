@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head><meta charset="utf-8"><title>اختبارات قِسمة</title></head>
+<body>
+<h1>نتائج اختبارات قِسمة</h1>
+<output id="results">جارٍ الاختبار…</output>
+<iframe src="qisma.html" title="تطبيق قِسمة" hidden></iframe>
+<script>
+document.querySelector('iframe').addEventListener('load', async function () {
+  try {
+    var win = this.contentWindow;
+    var results = win.SelfTest.run();
+    var failed = results.filter(function (r) { return !r.pass; });
+    var wait = function () { return new Promise(function (resolve) { setTimeout(resolve, 550); }); };
+    var find = function (selector, text) {
+      return Array.from(win.document.querySelectorAll(selector)).find(function (node) { return node.textContent.indexOf(text) !== -1; });
+    };
+    find('button', 'تحميل بيانات تجريبية').click();
+    await wait();
+    var demoLoaded = win.App.internals.getState().people.length === 240;
+    find('.step-pill', 'الملف').click();
+    await wait();
+    find('button', 'تحميل بيانات تجريبية').click();
+    var protectedReplacement = !!win.document.querySelector('[role="dialog"]') && win.App.internals.getState().people.length === 240;
+    find('[role="dialog"] button', 'إلغاء').click();
+    find('.step-pill', 'المبالغ').click();
+    await wait();
+    var numericInput = Array.from(win.document.querySelectorAll('input')).find(function (input) { return input.getAttribute('aria-label') && input.getAttribute('aria-label').indexOf('نسبة خصم') !== -1; });
+    var numericText = !!numericInput && numericInput.type === 'text' && numericInput.inputMode === 'decimal';
+    var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText };
+    document.getElementById('results').textContent = (results.length - failed.length) + '/' + results.length + ' ناجح\n' + JSON.stringify(integration);
+    console.log('QISMA_TESTS ' + JSON.stringify({ total: results.length, failed: failed, integration: integration }));
+  } catch (error) {
+    document.getElementById('results').textContent = error.stack || String(error);
+    console.error(error);
+  }
+});
+</script>
+</body>
+</html>
