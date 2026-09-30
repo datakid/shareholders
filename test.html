@@ -27,7 +27,16 @@ document.querySelector('iframe').addEventListener('load', async function () {
     await wait();
     var numericInput = Array.from(win.document.querySelectorAll('input')).find(function (input) { return input.getAttribute('aria-label') && input.getAttribute('aria-label').indexOf('نسبة خصم') !== -1; });
     var numericText = !!numericInput && numericInput.type === 'text' && numericInput.inputMode === 'decimal';
-    var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText };
+    var frame = this, stepperFits = true;
+    for (var w of [1280, 1024, 860, 720, 480, 360, 320]) {
+      frame.style.width = w + 'px';
+      frame.hidden = false;
+      await new Promise(function (resolve) { setTimeout(resolve, 150); });
+      var list = win.document.querySelector('.stepper');
+      if (list.scrollWidth > list.clientWidth + 1) stepperFits = false;
+    }
+    frame.hidden = true;
+    var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText, stepperFits: stepperFits };
     document.getElementById('results').textContent = (results.length - failed.length) + '/' + results.length + ' ناجح\n' + JSON.stringify(integration);
     console.log('QISMA_TESTS ' + JSON.stringify({ total: results.length, failed: failed, integration: integration }));
   } catch (error) {
