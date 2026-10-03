@@ -40,15 +40,19 @@ var Model = (function () {
   }
   function people(list) {
     if (!Array.isArray(list)) return [];
-    var seen = Object.create(null), maxId = 0;
-    list.forEach(function (p) { if (p && typeof p.id === 'number' && p.id > maxId) maxId = p.id; });
-    return list.filter(function (p) { return p && typeof p === 'object'; }).map(function (p, i) {
-      var q = person(p, i + 1);
-      var key = typeof q.id + ':' + q.id;
-      if (seen[key]) { maxId++; q.id = maxId; key = 'number:' + q.id; }
-      seen[key] = true;
-      return q;
-    });
+    var seen = new Set(), maxId = 0, i;
+    for (i = 0; i < list.length; i++) { var p0 = list[i]; if (p0 && typeof p0.id === 'number' && p0.id > maxId) maxId = p0.id; }
+    var out = [];
+    for (i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (!p || typeof p !== 'object') continue;
+      var q = person(p, out.length + 1);
+      var key = typeof q.id === 'number' ? q.id : typeof q.id + ':' + q.id;
+      if (seen.has(key)) { maxId++; q.id = maxId; key = q.id; }
+      seen.add(key);
+      out.push(q);
+    }
+    return out;
   }
   function tiers(obj) {
     var out = {};
@@ -209,6 +213,15 @@ var Importer = (function () {
     return 1;
   }
 
+  var canonMemos = [];
+  function canonCached(raw, names, aliases) {
+    var memo = null;
+    for (var i = 0; i < canonMemos.length; i++) if (canonMemos[i].names === names && canonMemos[i].aliases === aliases) { memo = canonMemos[i]; break; }
+    if (!memo) { memo = { names: names, aliases: aliases, map: new Map() }; canonMemos.unshift(memo); canonMemos.length = Math.min(canonMemos.length, 4); }
+    var k = typeof raw === 'string' ? raw : String(raw), v = memo.map.get(k);
+    if (v === undefined) { v = Engine.canonicalizeTierName(raw, names, aliases); memo.map.set(k, v); }
+    return v;
+  }
   function rowToPerson(row, mapping, id, tierNames, poolNames, penaltyScale, aliases) {
     function cell(key) {
       var idx = mapping[key];
@@ -217,9 +230,9 @@ var Importer = (function () {
       return (v == null || v === '') ? null : v;
     }
     var rawTier = cell('tier');
-    var canonTier = rawTier == null ? null : Engine.canonicalizeTierName(rawTier, tierNames, aliases);
+    var canonTier = rawTier == null ? null : canonCached(rawTier, tierNames, aliases);
     var rawPool = cell('pinnedPool');
-    var canonPool = rawPool == null ? null : Engine.canonicalizeTierName(rawPool, poolNames);
+    var canonPool = rawPool == null ? null : canonCached(rawPool, poolNames, null);
     var pen = Fmt.parseNumber(cell('penaltyRate'));
     return {
       id: id,
@@ -252,7 +265,8 @@ var Importer = (function () {
     var map = mapping || autoMap(headers);
     var tierNames = Object.keys((state && state.tiers) || {});
     var poolNames = Object.keys((state && state.pools) || {});
-    var body = rows.slice(hr + 1).filter(nonEmpty);
+    var body = [];
+    for (var b = hr + 1; b < rows.length; b++) if (nonEmpty(rows[b])) body.push(rows[b]);
     var penaltyScale = detectPenaltyScale(body, map.penaltyRate, state && state.penaltyScale);
     var people = body.map(function (row, i) {
       return rowToPerson(row, map, i + 1, tierNames, poolNames, penaltyScale, state && state.tierAliases);
@@ -268,22 +282,38 @@ var Importer = (function () {
       else if (!quoted && Object.prototype.hasOwnProperty.call(counts, text[h])) counts[text[h]]++;
     }
     var delimiter = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
-    var rows = [], row = [], cur = '', inQ = false;
-    for (var i = 0; i < text.length; i++) {
-      var ch = text[i];
-      if (inQ) {
-        if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
-        else cur += ch;
-        continue;
+    var D = delimiter.charCodeAt(0), n = text.length, rows = [], row = [], i = 0, filled = false;
+    function endRow() { if (filled) rows.push(row); row = []; filled = false; }
+    while (i < n) {
+      var c = text.charCodeAt(i), cell;
+      if (c === 34) {
+        var parts = '', s = i + 1;
+        for (;;) {
+          var q = text.indexOf('"', s);
+          if (q === -1) { parts += text.slice(s); i = n; break; }
+          parts += text.slice(s, q);
+          if (text.charCodeAt(q + 1) === 34) { parts += '"'; s = q + 2; continue; }
+          i = q + 1;
+          break;
+        }
+        var tail = i;
+        while (i < n) { var t = text.charCodeAt(i); if (t === D || t === 10 || t === 13) break; i++; }
+        cell = i > tail ? parts + text.slice(tail, i) : parts;
+      } else {
+        var st = i;
+        while (i < n) { var u = text.charCodeAt(i); if (u === D || u === 10 || u === 13) break; i++; }
+        cell = text.slice(st, i);
       }
-      if (ch === '"' && cur === '') { inQ = true; continue; }
-      if (ch === delimiter) { row.push(cur); cur = ''; continue; }
-      if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; continue; }
-      if (ch === '\r') continue;
-      cur += ch;
+      row.push(cell);
+      if (!filled && cell !== '' && cell.trim() !== '') filled = true;
+      if (i >= n) break;
+      var e = text.charCodeAt(i);
+      if (e === D) { i++; if (i >= n) row.push(''); continue; }
+      if (e === 13) { i++; if (text.charCodeAt(i) === 10) i++; endRow(); continue; }
+      if (e === 10) { i++; endRow(); continue; }
     }
-    if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
-    return rows.filter(function (r) { return r.some(function (c) { return String(c).trim() !== ''; }); });
+    endRow();
+    return rows;
   }
 
   function decodeText(buffer) {
@@ -345,7 +375,66 @@ var Reports = (function () {
   }
   var EMPTY = { netPiastres: 0, grossPiastres: 0, taxPiastres: 0, weight: 0, distWeight: 0, pool: null, pools: [], parts: [], idealNetEGP: 0, unresolvedTier: false, excluded: false, capped: false };
 
+  var memo = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function cached(result, key, people, build) {
+    if (!memo || !result) return build();
+    var bag = memo.get(result);
+    if (!bag) { bag = {}; memo.set(result, bag); }
+    var hit = bag[key];
+    if (hit && hit.people === people) return hit.value;
+    var value = build();
+    bag[key] = { people: people, value: value };
+    return value;
+  }
+  function colsFor(state, result) {
+    var c = result && result.ok && result.cols;
+    if (!c || c.n !== (state.people || []).length) return null;
+    var ppl = state.people;
+    for (var i = 0; i < c.n; i += Math.max(1, Math.floor(c.n / 64))) if (ppl[i].id !== c.ids[i]) return null;
+    if (c.n && ppl[c.n - 1].id !== c.ids[c.n - 1]) return null;
+    return c;
+  }
+  function DetailRow(p, c, i, pd) {
+    this.id = p.id; this.code = p.code || ''; this.name = p.name || ''; this.job = p.job || ''; this.dept = p.dept || ''; this.tier = p.tier || '';
+    var pc = c.pool[i];
+    this.pool = pc >= 0 ? c.poolNames[pc] : (pc === -2 ? c.poolsAt(i).join(' + ') : '');
+    this.weight = c.weight[i];
+    this.days = p.daysWorked == null ? pd : p.daysWorked;
+    this.penalty = p.penaltyRate == null ? 0 : p.penaltyRate;
+    this.manual = p.manualFactor == null ? 1 : p.manualFactor;
+    this.override = p.overrideValue;
+    this.pinned = p.pinnedPool || '';
+    this.excluded = !!p.excluded;
+    this.unresolvedTier = !c.excluded[i] && !!c.unresolved[i];
+    this.capped = !!c.capped[i];
+    this.grossPiastres = c.gross[i]; this.taxPiastres = c.tax[i]; this.netPiastres = c.net[i];
+    this.gross = c.gross[i] / 100; this.tax = c.tax[i] / 100; this.net = c.net[i] / 100;
+    var dw = c.dist[i];
+    this.ideal = dw > 0 ? c.kPi * dw / 100 : 0;
+    this.drift = this.netPiastres > 0 || this.ideal > 0 ? this.net - this.ideal : 0;
+    this.special = isSpecial(p) || this.capped;
+    this.notes = p.notes || '';
+    this.__p = p; this.__c = c; this.__i = i;
+  }
+  Object.defineProperty(DetailRow.prototype, 'pools', { get: function () { return this.__c.poolsAt(this.__i); } });
+  Object.defineProperty(DetailRow.prototype, 'parts', { get: function () { return this.__c.partsAt(this.__i); } });
+  Object.defineProperty(DetailRow.prototype, 'reason', { get: function () { return specialReason(this.__p, this); } });
+  DetailRow.prototype.toJSON = function () {
+    var o = {};
+    for (var k in this) if (k.charAt(0) !== '_' && Object.prototype.hasOwnProperty.call(this, k)) o[k] = this[k];
+    o.pools = this.pools; o.parts = this.parts; o.reason = this.reason;
+    return o;
+  };
   function detailRows(state, result) {
+    var c = colsFor(state, result);
+    if (c) return cached(result, 'detail', state.people, function () {
+      var ppl = state.people, pd2 = periodDaysOf(state), out = new Array(c.n);
+      for (var i = 0; i < c.n; i++) out[i] = new DetailRow(ppl[i], c, i, pd2);
+      return out;
+    });
+    return detailRowsSlow(state, result);
+  }
+  function detailRowsSlow(state, result) {
     var rmap = resultById(result), pd = periodDaysOf(state);
     return (state.people || []).map(function (p) {
       var r = rmap[p.id] || EMPTY;
@@ -386,6 +475,11 @@ var Reports = (function () {
   }
   function specialCasePeople(state) { return (state.people || []).filter(isSpecial); }
   function specialRows(state, result) {
+    if (colsFor(state, result)) return cached(result, 'special', state.people, function () {
+      return detailRows(state, result).filter(function (r) { return r.special; }).map(function (r) {
+        return { id: r.id, code: r.code, name: r.name, dept: r.dept, tier: r.tier, pool: r.pool, weight: r.weight, net: r.net, reason: r.reason, notes: r.notes };
+      });
+    });
     var rmap = resultById(result);
     return (state.people || []).filter(function (p) { var r = rmap[p.id]; return isSpecial(p) || (r && r.capped); }).map(function (p) {
       var r = rmap[p.id] || EMPTY;
@@ -398,6 +492,9 @@ var Reports = (function () {
   }
 
   function executiveRows(state, result) {
+    return cached(result, 'exec', state.people, function () { return executiveRowsRaw(state, result); });
+  }
+  function executiveRowsRaw(state, result) {
     var rows = detailRows(state, result);
     var paid = rows.filter(function (r) { return r.netPiastres > 0; });
     var sumP = function (k) { return rows.reduce(function (s, r) { return s + r[k]; }, 0); };
@@ -414,7 +511,7 @@ var Reports = (function () {
       return s + (pr ? pr.retainedPiastres : 0);
     }, 0) / 100;
     var unresolved = unresolvedRows(state, result);
-    var nets = paid.map(function (r) { return r.net; }).sort(function (a, b) { return a - b; });
+    var nets = Float64Array.from(paid, function (r) { return r.net; }).sort();
     var median = nets.length ? (nets.length % 2 ? nets[(nets.length - 1) / 2] : (nets[nets.length / 2 - 1] + nets[nets.length / 2]) / 2) : 0;
     var out = [
       { label: 'عدد الأشخاص في الملف', value: rows.length, kind: 'int' },
@@ -465,6 +562,10 @@ var Reports = (function () {
   }
 
   function groupRows(state, result, key, emptyLabel) {
+    var src = cached(result, 'group:' + key, state.people, function () { return groupRowsRaw(state, result, key, emptyLabel); });
+    return src.map(function (b) { return Object.assign({}, b); });
+  }
+  function groupRowsRaw(state, result, key, emptyLabel) {
     var rows = detailRows(state, result);
     var by = Object.create(null);
     rows.forEach(function (r) {
@@ -533,6 +634,20 @@ var Reports = (function () {
   }
 
   function conservationCheck(state, result) {
+    var c = result && result.ok && result.cols;
+    if (c) {
+      var probs = [];
+      poolNamesOf(state).forEach(function (name) {
+        var pr = result.poolResults[name];
+        if (!pr) return;
+        var k = c.poolNames.indexOf(name), P = c.poolNames.length, g = 0, t = 0, n = 0, i;
+        if (c.split) { for (i = 0; i < c.n; i++) { var cell = i * P + k; if (c.mH[cell]) { g += c.mG[cell]; t += c.mT[cell]; n += c.mN[cell]; } } }
+        else for (i = 0; i < c.n; i++) if (c.pool[i] === k) { g += c.gross[i]; t += c.tax[i]; n += c.net[i]; }
+        var exp = pr.effectiveGrossPiastres - (pr.retainedPiastres || 0);
+        if (g !== exp || t !== pr.taxPiastres || n !== g - t) probs.push({ pool: name, expected: exp, actual: g, expectedTax: pr.taxPiastres, actualTax: t, actualNet: n });
+      });
+      return { ok: probs.length === 0, problems: probs };
+    }
     var problems = [];
     poolNamesOf(state).forEach(function (name) {
       var pr = result && result.poolResults && result.poolResults[name];
@@ -553,8 +668,9 @@ var Reports = (function () {
     if (!baseline || !baseline.nets) return null;
     var rows = detailRows(state, result);
     var up = 0, down = 0, same = 0, added = 0, delta = 0, map = Object.create(null);
+    var nets = baseline.nets;
     rows.forEach(function (r) {
-      var b = baseline.nets[r.id];
+      var b = nets[r.id];
       if (b == null) { added++; map[r.id] = null; return; }
       var d = r.netPiastres - b;
       map[r.id] = d;
@@ -871,13 +987,31 @@ var Exporter = (function () {
       }).join(',');
     }).join('\r\n');
   }
-  function writeCsv(rows, filename) { downloadBlob(new Blob(['\uFEFF' + toCsv(rows)], { type: 'text/csv;charset=utf-8' }), safeName(filename)); }
-  function writeJson(payload, filename) { downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }), safeName(filename)); }
+  function csvCell(cell) {
+    if (cell == null) return '';
+    if (typeof cell === 'number') return isFinite(cell) ? String(cell) : '';
+    var s = String(cell);
+    if (/^\s*[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[",\r\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function writeCsv(rows, filename) {
+    var parts = ['\uFEFF'], buf = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || [], line = new Array(r.length);
+      for (var j = 0; j < r.length; j++) line[j] = csvCell(r[j]);
+      buf.push(line.join(','));
+      if (buf.length >= 20000) { parts.push(buf.join('\r\n') + '\r\n'); buf = []; }
+    }
+    if (buf.length) parts.push(buf.join('\r\n'));
+    downloadBlob(new Blob(parts, { type: 'text/csv;charset=utf-8' }), safeName(filename));
+  }
+  var XLSX_ROW_LIMIT = 200000;
+  function writeJson(payload, filename) { downloadBlob(new Blob([typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }), safeName(filename)); }
 
   return {
     buildFullReport: buildFullReport, buildSelectedReport: buildSelectedReport, buildViewExport: buildViewExport,
     buildTemplate: buildTemplate, templateRows: templateRows, buildSettingsExport: buildSettingsExport, detailAoa: detailAoa,
-    addPoolSheet: addPoolSheet, sheetRegistry: sheetRegistry, write: write, writeCsv: writeCsv, writeJson: writeJson, toCsv: toCsv,
+    addPoolSheet: addPoolSheet, sheetRegistry: sheetRegistry, write: write, writeCsv: writeCsv, writeJson: writeJson, toCsv: toCsv, XLSX_ROW_LIMIT: XLSX_ROW_LIMIT, downloadBlob: downloadBlob,
     available: available, sanitizeSheetName: sanitizeSheetName, newWorkbook: newWorkbook, kindFormat: kindFormat, safeName: safeName,
     FORMATS: { M2: M2, M4: M4, PCT: PCT, INT: INT }
   };

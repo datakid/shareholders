@@ -39,6 +39,7 @@ document.querySelector('iframe').addEventListener('load', async function () {
     var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText, stepperFits: stepperFits };
     document.getElementById('results').textContent = (results.length - failed.length) + '/' + results.length + ' ناجح\n' + JSON.stringify(integration);
     console.log('QISMA_TESTS ' + JSON.stringify({ total: results.length, failed: failed, integration: integration }));
+    console.log('QISMA_PERF ' + JSON.stringify(results.filter(function (r) { return /^(S2|S3|T11|T22)/.test(r.name); }).map(function (r) { return r.name.slice(0, 3) + ': ' + r.detail; })));
   } catch (error) {
     document.getElementById('results').textContent = error.stack || String(error);
     console.error(error);

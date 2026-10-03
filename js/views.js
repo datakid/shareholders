@@ -65,7 +65,9 @@
     var st = S();
     var prev = st.ui.tableDetail;
     var prevPer = st.ui.rowsPerPage;
-    st.ui.rowsPerPage = 100000;
+    var total = Q.viewRows().length;
+    if (total > 5000) UI.toast('تُطبع أول 5,000 صف من العرض — للقائمة الكاملة استخدم التصدير', 'warn', 6000);
+    st.ui.rowsPerPage = Math.min(5000, Math.max(prevPer, total));
     renderTable();
     setTimeout(function () {
       window.print();
@@ -79,8 +81,9 @@
   function setBaseline() {
     var st = S();
     if (!Q.ok()) return;
-    var nets = {};
-    st.result.people.forEach(function (r) { nets[r.id] = r.netPiastres; });
+    var nets = {}, c = st.result.cols;
+    if (c) for (var i = 0; i < c.n; i++) nets[c.ids[i]] = c.net[i];
+    else st.result.people.forEach(function (r) { nets[r.id] = r.netPiastres; });
     var had = !!st.baseline;
     st.baseline = { at: Date.now(), label: st.period || Fmt.humanTime(Date.now()), nets: nets, totalNet: st.result.totals.net, count: st.people.length };
     Q.scheduleSave();
@@ -129,7 +132,7 @@
     grid.appendChild(Q.kpiCard('حفظ القيمة', consNode, cons.ok ? (tot.retained > 0 ? 'الموزّع + غير الموزّع (' + Fmt.egp(tot.retained) + ') = المجمعات' : 'مجموع الأنصبة = إجمالي كل مجمع بلا فرق') : 'راجع ورقة المنهجية', cons.ok ? 'ok' : 'danger', 'ok'));
     grid.appendChild(Q.kpiCard('نصيب وحدة الوزن', UI.numText(Fmt.egp(r.kEffective, 4), 'lg'), 'كل وحدة وزن تساوي هذا المبلغ صافيًا', 'flat', 'layers'));
     grid.appendChild(Q.kpiCard('أقصى انحراف فردي', UI.moneyEGP(tot.maxDrift, { size: 'lg' }), tot.maxDrift < 1 ? 'أقل من جنيه عن النصيب المثالي' : 'بسبب الموازنة بين المجمعات أو التقريب', tot.maxDrift < 1 ? 'ok' : 'warn', 'chart'));
-    var un = (r.unresolvedTierIds || []).length, ex = Reports.excludedRows(st).length;
+    var un = (r.unresolvedTierIds || []).length, ex = Q.flagCounts().excluded || 0;
     if (un) grid.appendChild(clickKpi(Q.kpiCard('بدون فئة', UI.numText(Fmt.int(un), 'lg'), 'خارج التوزيع — اضغط للعرض', 'danger', 'warn'), 'unresolved'));
     if (ex) grid.appendChild(clickKpi(Q.kpiCard('مستبعدون', UI.numText(Fmt.int(ex), 'lg'), 'بقرار صريح — اضغط للعرض', 'flat', 'lock'), 'excluded'));
     if (r.cappedCount) grid.appendChild(clickKpi(Q.kpiCard('بلغوا الحد الأقصى', UI.numText(Fmt.int(r.cappedCount), 'lg'), 'الحد ' + Fmt.egp(r.options.capNet) + ' ج.م', 'warn', 'cap'), 'capped'));
@@ -205,16 +208,17 @@
 
   function distributionCard() {
     var st = S();
-    var rows = Q.rowsCache().filter(function (r) { return r.netPiastres > 0; });
+    var all = Q.rowsCache(), tmp = new Float64Array(all.length), cnt = 0;
+    for (var ri = 0; ri < all.length; ri++) if (all[ri].netPiastres > 0) tmp[cnt++] = all[ri].net;
     var c = Q.card('توزيع الأنصبة', 'عدد المستحقين في كل شريحة صافٍ');
     var body = el('div', 'card-pad');
-    if (rows.length < 2) { body.appendChild(el('div', 'small muted', 'لا توجد بيانات كافية.')); c.appendChild(body); return c; }
-    var vals = rows.map(function (r) { return r.net; }).sort(function (a, b) { return a - b; });
+    if (cnt < 2) { body.appendChild(el('div', 'small muted', 'لا توجد بيانات كافية.')); c.appendChild(body); return c; }
+    var vals = tmp.subarray(0, cnt).sort();
     var lo = vals[0], hi = vals[vals.length - 1];
     var bins = 12, width = (hi - lo) / bins || 1, counts = [];
     for (var i = 0; i < bins; i++) counts.push(0);
     vals.forEach(function (v) { var k = Math.min(bins - 1, Math.floor((v - lo) / width)); counts[k]++; });
-    var max = Math.max.apply(null, counts) || 1;
+    var max = counts.reduce(function (m, x) { return x > m ? x : m; }, 0) || 1;
     var hist = el('div', 'histo');
     hist.setAttribute('role', 'img');
     hist.setAttribute('aria-label', 'توزيع الصافي من ' + Fmt.egp(lo) + ' إلى ' + Fmt.egp(hi));
@@ -381,8 +385,12 @@
       tb.appendChild(tr);
     });
     t.appendChild(tb);
-    var sums = { gross: 0, tax: 0, net: 0 };
-    rows.forEach(function (r) { sums.gross += r.grossPiastres; sums.tax += r.taxPiastres; sums.net += r.netPiastres; });
+    var sums = st.__sumsFor === rows ? st.__sums : null;
+    if (!sums) {
+      sums = { gross: 0, tax: 0, net: 0 };
+      for (var si = 0; si < rows.length; si++) { var rr = rows[si]; sums.gross += rr.grossPiastres; sums.tax += rr.taxPiastres; sums.net += rr.netPiastres; }
+      st.__sums = sums; st.__sumsFor = rows;
+    }
     var tfoot = el('tfoot'), ftr = el('tr');
     cols.forEach(function (c, i) {
       var td = el('td', c.numeric ? 'num-col' : null);
@@ -414,15 +422,21 @@
   }
   function meta() { var st = S(); return { at: Date.now(), version: APP_VERSION, title: st.title, period: st.period }; }
   function needOk() { if (!Q.ok()) { UI.toast('صحّح أخطاء الحساب قبل التصدير', 'warn'); return false; } return true; }
+  function tooBig() { return S().people.length > Exporter.XLSX_ROW_LIMIT; }
   function run(label, fn, csvRows) {
+    if (csvRows && tooBig()) {
+      Busy.run('جارٍ إنشاء ' + label + '…', function () { Exporter.writeCsv(csvRows(), baseName(label) + '.csv'); })
+        .then(function () { UI.toast('نُزّل ' + label + ' بصيغة CSV — الحجم أكبر من أن يُكتب كملف Excel في المتصفح', 'ok', 6000); }, function (e) { UI.toast('تعذّر التصدير: ' + (e && e.message || e), 'danger'); });
+      return;
+    }
     if (!Exporter.available()) {
       if (!csvRows) { UI.toast('محرك Excel غير محمّل — اتصل بالإنترنت وأعد التحميل', 'danger'); return; }
       try { Exporter.writeCsv(csvRows(), baseName(label) + '.csv'); UI.toast('محرك Excel غير محمّل — نُزّل ' + label + ' بصيغة CSV', 'warn', 6000); }
       catch (e) { UI.toast('تعذّر التصدير: ' + (e && e.message || e), 'danger'); }
       return;
     }
-    try { fn(); UI.toast('تم تنزيل ' + label, 'ok'); }
-    catch (e) { if (window.console) console.error(e); UI.toast('تعذّر إنشاء الملف: ' + (e && e.message || 'خطأ غير معروف'), 'danger'); }
+    Busy.maybe(S().people.length, 'جارٍ إنشاء ' + label + '…', fn)
+      .then(function () { UI.toast('تم تنزيل ' + label, 'ok'); }, function (e) { if (window.console) console.error(e); UI.toast('تعذّر إنشاء الملف: ' + (e && e.message || 'خطأ غير معروف'), 'danger'); });
   }
   function exportFullReport() {
     if (!needOk()) return;
@@ -462,10 +476,9 @@
   function exportSessionBundle() {
     var st = S();
     Store.flushAll();
-    try {
-      Exporter.writeJson(JSON.parse(Store.serializeBundle(st)), 'نسخة ' + APP_NAME_LATIN + ' - ' + baseName() + '.json');
-      UI.toast('تم تنزيل نسخة كاملة من العمل', 'ok');
-    } catch (e) { UI.toast('تعذّر إنشاء النسخة', 'danger'); }
+    Busy.maybe(st.people.length, 'جارٍ تجهيز النسخة…', function () {
+      Exporter.writeJson(Store.serializeBundle(st), 'نسخة ' + APP_NAME_LATIN + ' - ' + baseName() + '.json');
+    }).then(function () { UI.toast('تم تنزيل نسخة كاملة من العمل', 'ok'); }, function () { UI.toast('تعذّر إنشاء النسخة', 'danger'); });
   }
   Q.exportSessionBundle = exportSessionBundle;
   function exportSettingsOnly(format) {
@@ -516,7 +529,7 @@
     if (s.tierAliases) st.tierAliases = Object.assign({}, s.tierAliases);
     if (s.ui) { st.ui = Model.ui(Object.assign({}, st.ui, s.ui)); Theme.set(st.ui.theme); applyMotion(); }
     if (withPeople) {
-      st.people = Model.people(s.people || []);
+      st.people = s.__packed ? s.people : Model.people(s.people || []);
       if (s.title != null) st.title = String(s.title);
       if (s.period != null) st.period = String(s.period);
       st.fileName = s.fileName || 'نسخة مستعادة';
@@ -546,6 +559,7 @@
     if (!needOk()) return;
     if (!Exporter.available()) { UI.toast('محرك Excel غير محمّل', 'danger'); return; }
     var st = S();
+    if (tooBig()) { exportFullReport(); return; }
     var reg = Exporter.sheetRegistry(st);
     var unresolved = (st.result.unresolvedTierIds || []).length;
     var hints = {
@@ -942,6 +956,7 @@
     list.push({ group: 'بيانات', icon: 'save', label: 'تنزيل نسخة كاملة', kbd: 'Ctrl+S', run: exportSessionBundle });
     list.push({ group: 'بيانات', icon: 'folder', label: 'استعادة نسخة', run: importBundle });
     list.push({ group: 'بيانات', icon: 'people', label: 'تحميل بيانات تجريبية', run: Q.loadDemo });
+    list.push({ group: 'بيانات', icon: 'chart', label: 'اختبار الحمل (حتى مليوني صف)', run: Q.openStressPicker });
     PANES.forEach(function (p) { list.push({ group: 'الإعدادات', icon: p.icon, label: 'الإعدادات: ' + p.label, run: function () { openSettings(p.key); } }); });
     list.push({ group: 'الإعدادات', icon: 'moon', label: 'تبديل المظهر', run: function () { Q.setTheme(Theme.resolve() === 'dark' ? 'light' : 'dark'); } });
     list.push({ group: 'مساعدة', icon: 'keyboard', label: 'اختصارات لوحة المفاتيح', kbd: '?', run: openShortcuts });
@@ -1016,12 +1031,21 @@
   Q.openPalette = openPalette;
 
   function restoreSession() {
-    var st = S(), s = st.__restore;
-    if (!s) return;
-    st.__restore = null;
-    applyBundle({ ok: true, state: s }, true);
-    if (s.screen && Q.screenEnabled(s.screen) && s.screen !== st.screen) Q.goto(s.screen);
-    if (s.rawDropped) UI.toast('ملاحظة: الملف الأصلي لم يُحفظ لكبر حجمه — التعديلات والبيانات محفوظة كاملة', 'warn', 7000);
+    var st = S(), stub = st.__restore;
+    if (!stub) return;
+    function finish(s) {
+      st.__restore = null;
+      applyBundle({ ok: true, state: s }, true);
+      if (s.screen && Q.screenEnabled(s.screen) && s.screen !== st.screen) Q.goto(s.screen);
+      if (s.rawDropped) UI.toast('الملف الأصلي لم يُحفظ لكبر حجمه — البيانات والتعديلات محفوظة كاملة', 'warn', 7000);
+    }
+    if (!stub.inIdb) { finish(stub); return; }
+    Busy.show('جارٍ استعادة ' + Fmt.int(stub.count || 0) + ' صف…');
+    Store.loadBig().then(function (s) {
+      Busy.hide();
+      if (!s) { st.__restore = null; Q.renderNotices(); UI.toast('تعذّر العثور على الجلسة المحفوظة', 'danger'); return; }
+      setTimeout(function () { finish(s); }, 20);
+    }, function () { Busy.hide(); UI.toast('تعذّر قراءة الجلسة المحفوظة', 'danger'); });
   }
   Q.restoreSession = restoreSession;
 
@@ -1079,7 +1103,8 @@
     Theme.init(st.ui.theme);
     applyMotion();
     var sess = Store.load('session');
-    if (sess && !sess.__error && ((sess.people && sess.people.length) || (sess.sourceGrid && sess.sourceGrid.length) || (sess.rawRows && sess.rawRows.length))) st.__restore = sess;
+    if (sess && !sess.__error && sess.inIdb) { sess.people = { length: sess.count || 0 }; st.__restore = sess; }
+    else if (sess && !sess.__error && ((sess.people && sess.people.length) || (sess.sourceGrid && sess.sourceGrid.length) || (sess.rawRows && sess.rawRows.length))) st.__restore = sess;
     else if (sess && sess.__error === 'NEWER_SCHEMA') setTimeout(function () { UI.toast('الجلسة المحفوظة من إصدار أحدث ولم تُقرأ حفاظًا عليها', 'warn', 8000); }, 400);
     Q.autosaveArmed = true;
     window.addEventListener('scroll', function () { if (Q.hosts.topbar) Q.hosts.topbar.classList.toggle('is-elevated', window.scrollY > 6); }, { passive: true });

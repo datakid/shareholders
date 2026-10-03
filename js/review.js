@@ -52,6 +52,7 @@
     var n = Q.updatePeople(ids, patchFn);
     if (!n) return 0;
     Q.pushUndo(label, snap);
+    if (S().people.length > 30000 && S().__app) { Q.recomputeBusy(null, function () { afterEdit(opts); }); return n; }
     Q.recompute();
     afterEdit(opts);
     return n;
@@ -149,16 +150,19 @@
       groups[w.code].push(w);
     });
     if (!order.length) return null;
-    var total = order.reduce(function (s, c) { return s + groups[c].length; }, 0);
+    var wc = (st.result && st.result.warningCounts) || {};
+    function countOf(c) { return wc[c] != null ? wc[c] : groups[c].length; }
+    var total = order.reduce(function (s, c) { return s + countOf(c); }, 0);
     var list = el('div', 'warn-groups');
     order.forEach(function (code) {
       var r = el('div', 'warn-group');
-      r.appendChild(UI.badge(Fmt.int(groups[code].length), 'warn'));
+      r.appendChild(UI.badge(Fmt.int(countOf(code)), 'warn'));
       r.appendChild(el('b', null, Reports.WARN_KIND[code] || code));
       r.appendChild(el('span', 'muted', groups[code][0].message));
       list.appendChild(r);
     });
-    var rowsAffected = Object.keys(Q.problemIds()).length;
+    var pids = Q.problemIds();
+    var rowsAffected = pids.__size != null ? pids.__size : Object.keys(pids).length;
     var acts = [btn('كل التنبيهات', { size: 'sm', onClick: openWarningsModal })];
     if (rowsAffected) acts.unshift(btn('عرض ' + Fmt.int(rowsAffected) + ' صف', { size: 'sm', icon: 'filter', onClick: function () { setFlagFilter('problems'); } }));
     return UI.notice({ tone: 'warn', title: Fmt.int(total) + ' ملاحظة — الحساب تم، لكن راجعها', children: [list], actions: acts });
@@ -177,7 +181,7 @@
       thead.appendChild(tr);
       t.appendChild(thead);
       var tb = el('tbody');
-      rows.forEach(function (r) {
+      rows.slice(0, 500).forEach(function (r) {
         var row = el('tr');
         row.appendChild(el('td', null, r.kind));
         row.appendChild(el('td', 'small muted', r.target));
@@ -191,7 +195,7 @@
       tw.appendChild(t);
       m.body.appendChild(tw);
     }
-    m.foot.appendChild(el('div', 'small muted', Fmt.int(rows.length) + ' تنبيه'));
+    m.foot.appendChild(el('div', 'small muted', Fmt.int(rows.length) + ' تنبيه' + (rows.length > 500 ? ' — يُعرض أول 500، والكل في ورقة التنبيهات بالتقرير' : '')));
     m.foot.appendChild(el('div', 'spacer'));
     m.foot.appendChild(btn('إغلاق', { variant: 'primary', onClick: m.close }));
   }
@@ -208,7 +212,7 @@
     if (ub) host.appendChild(ub);
     if (ws) host.appendChild(ws);
     if (!ub && !ws) {
-      var inside = r.people.filter(function (p) { return p.weight > 0; }).length;
+      var inside = r.insideCount != null ? r.insideCount : r.people.filter(function (p) { return p.weight > 0; }).length;
       host.appendChild(UI.notice({ tone: 'ok', compact: true, title: 'كل شيء سليم', text: Fmt.int(inside) + ' شخص داخل التوزيع، ولا توجد ملاحظات على البيانات.' }));
     }
   }
@@ -241,11 +245,7 @@
       var dd = UI.dropdown({
         size: 'sm', highlightSet: true, ariaLabel: 'تصفية حسب ' + d[2], value: st.filters[key],
         options: function () {
-          var rows = Q.rowsCache(), counts = Object.create(null);
-          rows.forEach(function (r) {
-            if (key === 'pool') (r.pools.length ? r.pools : (r.pinned ? [r.pinned] : [])).forEach(function (p) { counts[p] = (counts[p] || 0) + 1; });
-            else if (r[key]) counts[r[key]] = (counts[r[key]] || 0) + 1;
-          });
+          var rows = Q.rowsCache(), counts = Q.groupCounts(key);
           var vals = key === 'pool' ? Object.keys(st.pools) : Q.uniqueValues(key);
           var o = [{ value: '', label: d[1], count: rows.length }];
           vals.forEach(function (v) { o.push({ value: v, label: v, count: counts[v] || 0 }); });
@@ -268,12 +268,11 @@
 
     function paintChips() {
       clearNode(chips);
-      var rows = Q.rowsCache();
+      var fc = Q.flagCounts();
       Q.FLAGS.forEach(function (f) {
         var on = st.filters.flags.indexOf(f.key) !== -1;
         if (f.key === 'changed' && !st.baseline) return;
-        var n = 0;
-        for (var i = 0; i < rows.length; i++) if (f.test(rows[i])) n++;
+        var n = fc[f.key] || 0;
         if (!n && !on) return;
         var c = el('button', 'chip' + (f.tone ? ' chip-' + f.tone : ''));
         c.type = 'button';
@@ -396,8 +395,7 @@
     clearNode(host);
     if (!r || !r.ok) { host.hidden = true; return; }
     host.hidden = false;
-    var paid = 0;
-    r.people.forEach(function (p) { if (p.netPiastres > 0) paid++; });
+    var paid = r.paidCount;
     function item(label, node, tone) {
       var i = el('div', 'ls-item' + (tone ? ' ls-' + tone : ''));
       i.appendChild(el('span', 'ls-label', label));
@@ -440,14 +438,24 @@
   }
   function netKey(r) { return r ? (r.unresolvedTier ? 'u' : (r.excluded ? 'x' : String(r.netPiastres))) : ''; }
 
-  function selectedIds() { var st = S(); return st.people.filter(function (p) { return st.selection[p.id]; }).map(function (p) { return p.id; }); }
+  function selectedIds() {
+    var st = S(), sel = st.selection, keys = Object.keys(sel);
+    if (!keys.length) return [];
+    if (keys.length * 4 < st.people.length) {
+      var pos = Q.idPos(), out = [];
+      keys.forEach(function (k) { var i = pos.get(k); if (i === undefined) i = pos.get(Number(k)); if (i !== undefined) out.push(i); });
+      out.sort(function (a, b) { return a - b; });
+      return out.map(function (i) { return st.people[i].id; });
+    }
+    return st.people.filter(function (p) { return sel[p.id]; }).map(function (p) { return p.id; });
+  }
   Q.selectedIds = selectedIds;
   function toggleSel(id, v) { var st = S(); if (v) st.selection[id] = true; else delete st.selection[id]; paintSelBar(); paintHeadCheck(); }
   function paintHeadCheck() {
     var cb = Q.hosts.headCheck;
     if (!cb) return;
-    var st = S(), ids = st.__gridIds || [], n = 0;
-    ids.forEach(function (id) { if (st.selection[id]) n++; });
+    var st = S(), ids = st.__gridIds || [], n = 0, sel = st.selection, keys = Object.keys(sel).length;
+    if (keys) for (var i = 0; i < ids.length; i++) if (sel[ids[i]]) n++;
     cb.checked = ids.length > 0 && n === ids.length;
     cb.indeterminate = n > 0 && n < ids.length;
   }
@@ -468,11 +476,10 @@
   }
 
   function deletePeople(ids) {
-    var st = S(), set = Object.create(null);
-    ids.forEach(function (id) { set[id] = true; });
+    var st = S(), set = new Set(ids);
     function doIt() {
       var snap = Q.snapshot();
-      st.people = st.people.filter(function (p) { return !set[p.id]; });
+      st.people = st.people.filter(function (p) { return !set.has(p.id); });
       Q.pushUndo('حذف ' + ids.length + ' صف', snap);
       st.selection = {};
       Q.recompute();
@@ -513,8 +520,9 @@
     var sl = prevWrap ? prevWrap.scrollLeft : 0;
     var snap = Q.captureFocus();
     clearNode(body);
-    var ids = Q.viewRows().map(function (r) { return r.id; });
-    st.__gridIds = ids;
+    var view = Q.viewRows(), ids;
+    if (st.__gridIdsFor === view && st.__gridIds) ids = st.__gridIds;
+    else { ids = new Array(view.length); for (var vi = 0; vi < view.length; vi++) ids[vi] = view[vi].id; st.__gridIds = ids; st.__gridIdsFor = view; }
     if (Q.hosts.gridFilter) Q.hosts.gridFilter.setCount(ids.length, st.people.length);
     if (!ids.length) {
       var filtered = Q.activeFilterList().length > 0;
@@ -784,8 +792,12 @@
 
   Q.openPerson = function (id) {
     var st = S();
-    var order = Q.viewRows().map(function (r) { return r.id; });
-    if (order.indexOf(id) === -1) order = st.people.map(function (p) { return p.id; });
+    var view = Q.viewRows(), order = new Array(view.length);
+    for (var oi = 0; oi < view.length; oi++) order[oi] = view[oi].id;
+    var where = new Map();
+    order.forEach(function (x, i) { where.set(x, i); });
+    if (!where.has(id)) { order = st.people.map(function (p) { return p.id; }); where = new Map(); order.forEach(function (x, i) { where.set(x, i); }); }
+    order.indexOf = function (x) { var v = where.get(x); return v === undefined ? -1 : v; };
     var m = UI.modal({ title: nameOf(id), cls: 'sheet', onClose: function () { Q.hosts.sheetRepaint = null; } });
     var titleEl = m.box.querySelector('.modal-title');
     var subEl = el('div', 'modal-sub');

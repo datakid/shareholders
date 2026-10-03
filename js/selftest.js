@@ -522,6 +522,57 @@ var SelfTest = (function () {
       record('E12 — المقارنة بالمرجع تحصي من زاد ومن نقص', d.down === 1 && d.up === 11 && d.deltaPiastres === 0, 'زاد ' + d.up + ' نقص ' + d.down + ' فرق ' + d.deltaPiastres);
     })();
 
+    (function S1() {
+      var r = rng(77), ok = true, detail = '', n = 0;
+      for (var s = 0; s < 40 && ok; s++) {
+        var people = randomPeople(r, 30 + Math.floor(r() * 200));
+        var res = Engine.runPipeline(baseState(people, { pools: pools(Math.round(r() * 9e6) / 100 + 1, Math.round(r() * 4e6) / 100 + 1), roundingStep: [1, 25, 100][s % 3], roundingTarget: s % 2 ? 'net' : 'gross', capNet: s % 4 === 0 ? 900 : null }));
+        if (onlyEmptyPoolRefusal(res)) continue;
+        if (!res.ok) { ok = false; detail = JSON.stringify(res.errors); break; }
+        n++;
+        var lazyPeople = res.people, c = res.cols;
+        for (var i = 0; i < c.n; i++) {
+          if (lazyPeople[i].netPiastres !== c.net[i] || lazyPeople[i].grossPiastres !== c.gross[i]) { ok = false; detail = 'عمود الصافي لا يطابق صف ' + i; break; }
+        }
+        var st = baseState(people);
+        var rows = Reports.detailRows(st, res), sumRows = rows.reduce(function (a, x) { return a + x.netPiastres; }, 0);
+        if (sumRows !== res.totals.net) { ok = false; detail = 'مجموع صفوف التقرير ≠ الإجمالي'; }
+      }
+      record('S1 — الأعمدة والصفوف الكسولة والتقارير متطابقة بالقرش (40 سيناريو)', ok && n > 0, ok ? n + ' سيناريو' : detail);
+    })();
+
+    (function S2() {
+      var people = [];
+      for (var i = 0; i < 1000000; i++) people.push({ id: i + 1, code: '', name: 'ش' + (i % 5000), job: '', dept: 'ق' + (i % 9), tier: TN[i % 4], daysWorked: i % 11 ? null : 20, penaltyRate: i % 17 ? null : 0.1, manualFactor: null, overrideValue: null, pinnedPool: null, excluded: i % 97 === 0, notes: '' });
+      var t0 = performance.now();
+      var res = Engine.runPipeline(baseState(people, { pools: pools(90000000, 40000000) }));
+      var ms = performance.now() - t0;
+      var cons = res.ok && sumGross(res, 'الخدمة') === Engine.toPiastres(90000000);
+      record('S2 — مليون صف: حساب كامل مع حفظ القيمة', res.ok && cons && ms < 20000, Math.round(ms) + ' مللي');
+    })();
+
+    (function S3() {
+      var rows = [];
+      for (var i = 0; i < 200000; i++) rows.push({ id: i + 1, name: 'محمد ' + (i % 7000) + ' أحمد', dept: 'قسم ' + (i % 9), tier: 'فئة ' + (i % 4), code: String(10000 + i), job: '' });
+      var idx = Search.buildIndex(rows), t0 = performance.now();
+      var res = Search.run(idx, 'محمد 123');
+      var ms = performance.now() - t0;
+      var t1 = performance.now();
+      var order = Sorter.sortIndex(rows.length, function (k) { return rows[k].dept; }, 'asc');
+      var sms = performance.now() - t1;
+      record('S3 — بحث وترتيب 200 ألف صف', res && res.count > 0 && ms < 1500 && order.length === rows.length && sms < 1500, 'بحث ' + Math.round(ms) + ' مللي، ترتيب ' + Math.round(sms) + ' مللي');
+    })();
+
+    (function S4() {
+      var people = [person(1, { penaltyRate: 0.2, pinnedPool: 'الخدمة', notes: 'x' }), person(2, { excluded: true, overrideValue: 500 }), person(7, { tier: 'مجهولة', daysWorked: 3 })];
+      var packed = Pack.toJson(Pack.people(people));
+      var back = Pack.unpeople(JSON.parse(JSON.stringify(packed)));
+      var same = JSON.stringify(back) === JSON.stringify(people.map(function (p) { return Model.person(p); }));
+      var csv = Importer.readCsv('a,b,c\n1,"x,""y""",3\r\n,,\n4,5,\n');
+      var csvOk = csv.length === 3 && csv[1][1] === 'x,"y"' && csv[2][2] === '';
+      record('S4 — التخزين العمودي يعود بلا فقد، وقارئ CSV السريع دقيق', same && csvOk, JSON.stringify(csv));
+    })();
+
     return results;
   }
 

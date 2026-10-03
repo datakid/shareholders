@@ -199,17 +199,30 @@ var Search = (function () {
   'use strict';
   var EXACT = 1000, PREFIX = 700, WORD_PREFIX = 600, SUBSTRING = 500, SUBSEQ = 300, TYPO = 150;
 
+  var WORDS = new Map(), EMPTY_WORDS = [];
+  function wordsOf(s) {
+    if (!s) return EMPTY_WORDS;
+    var w = WORDS.get(s);
+    if (w === undefined) { w = s.indexOf(' ') === -1 ? [s] : s.split(' '); if (WORDS.size > 300000) WORDS.clear(); WORDS.set(s, w); }
+    return w;
+  }
+  function Entry(p, i) {
+    this.id = p.id; this.i = i;
+    this.name = Engine.normalizeLoose(p.name);
+    this.dept = Engine.normalizeLoose(p.dept);
+    this.tier = Engine.normalizeLoose(p.tier);
+    this.job = Engine.normalizeLoose(p.job);
+    this.code = Engine.normalizeLoose(p.code);
+    this.num = String(p.id);
+    this.words = wordsOf(this.name);
+    this.deptWords = wordsOf(this.dept);
+    this.tierWords = wordsOf(this.tier);
+    this.jobWords = wordsOf(this.job);
+  }
+  Object.defineProperty(Entry.prototype, 'all', { get: function () { var v = this.name + ' ' + this.dept + ' ' + this.tier + ' ' + this.job + ' ' + this.code + ' ' + this.num; Object.defineProperty(this, 'all', { value: v, writable: true }); return v; } });
   function buildIndex(people) {
     var entries = new Array(people.length);
-    for (var i = 0; i < people.length; i++) {
-      var p = people[i];
-      var name = Engine.normalizeLoose(p.name);
-      var dept = Engine.normalizeLoose(p.dept);
-      var tier = Engine.normalizeLoose(p.tier);
-      var job = Engine.normalizeLoose(p.job);
-      var code = Engine.normalizeLoose(p.code);
-      entries[i] = { id: p.id, i: i, name: name, words: name ? name.split(' ') : [], dept: dept, deptWords: dept ? dept.split(' ') : [], tier: tier, tierWords: tier ? tier.split(' ') : [], job: job, jobWords: job ? job.split(' ') : [], num: String(p.id), code: code, all: [name, dept, tier, job, code, String(p.id)].join(' ') };
-    }
+    for (var i = 0; i < people.length; i++) entries[i] = new Entry(people[i], i);
     return { entries: entries, size: people.length };
   }
   function isSubsequence(needle, hay) {
@@ -265,26 +278,40 @@ var Search = (function () {
     }
     return best;
   }
-  function run(index, query) {
+  function mayMatch(needle, e, fuzzy) {
+    if (fuzzy) return true;
+    return e.name.indexOf(needle) !== -1 || e.dept.indexOf(needle) !== -1 || e.tier.indexOf(needle) !== -1 || e.job.indexOf(needle) !== -1 || e.code.indexOf(needle) === 0 || e.num === needle;
+  }
+  function run(index, query, limitFn) {
     var raw = Engine.normalizeLoose(query);
     if (!raw) return null;
     var terms = raw.split(' ').filter(Boolean);
-    var entries = index.entries, hits = [];
-    for (var i = 0; i < entries.length; i++) {
-      var s = scoreEntry(raw, entries[i]);
-      if (s === 0 && terms.length > 1 && entries[i].all) {
-        var okAll = true;
-        for (var t = 0; t < terms.length; t++) {
-          if (entries[i].all.indexOf(terms[t]) === -1) { okAll = false; break; }
-        }
+    var entries = index.entries, n = entries.length, hits = [], fuzzy = raw.length >= 3;
+    var sIdx = new Int32Array(n), sScore = new Int32Array(n), m = 0;
+    for (var i = 0; i < n; i++) {
+      var e = entries[i];
+      if (limitFn && !limitFn(i)) continue;
+      var s = mayMatch(raw, e, fuzzy) ? scoreEntry(raw, e) : 0;
+      if (s === 0 && terms.length > 1) {
+        var all = e.all, okAll = true;
+        for (var t = 0; t < terms.length; t++) if (all.indexOf(terms[t]) === -1) { okAll = false; break; }
         if (okAll) s = 120;
       }
-      if (s > 0) hits.push({ id: entries[i].id, i: entries[i].i, score: s });
+      if (s > 0) { sIdx[m] = i; sScore[m] = s; m++; }
     }
-    hits.sort(function (a, b) { return (b.score - a.score) || (a.i - b.i); });
-    var ids = Object.create(null), order = Object.create(null);
-    for (var h = 0; h < hits.length; h++) { ids[hits[h].id] = true; order[hits[h].id] = h; }
-    return { needle: raw, terms: terms, ids: ids, order: order, count: hits.length, ranked: hits };
+    var order = new Array(m);
+    for (var k = 0; k < m; k++) order[k] = k;
+    order.sort(function (a, b) { return (sScore[b] - sScore[a]) || (sIdx[a] - sIdx[b]); });
+    var ids = new Set(), rankMap = new Map(), rows = new Uint8Array(n), rankArr = new Int32Array(n).fill(-1);
+    for (var h = 0; h < m; h++) {
+      var ix = sIdx[order[h]], en = entries[ix];
+      ids.add(en.id); rankMap.set(en.id, h); rows[ix] = 1; rankArr[ix] = h;
+      if (h < 200) hits.push({ id: en.id, i: ix, score: sScore[order[h]] });
+    }
+    var idsObj = { has: function (id) { return ids.has(id); } };
+    var proxyIds = new Proxy(idsObj, { get: function (t, k) { if (k === 'has') return t.has; return ids.has(k) || ids.has(Number(k)) ? true : undefined; } });
+    var proxyOrder = new Proxy({}, { get: function (t, k) { var v = rankMap.get(k); if (v === undefined) v = rankMap.get(Number(k)); return v; } });
+    return { needle: raw, terms: terms, ids: proxyIds, order: proxyOrder, rows: rows, rank: rankArr, count: m, ranked: hits };
   }
   function highlight(text, needle) {
     var frag = document.createDocumentFragment();
@@ -352,7 +379,187 @@ var Sorter = (function () {
     return decorated.map(function (d) { return d.r; });
   }
   function nextDir(current) { return current === 'asc' ? 'desc' : (current === 'desc' ? null : 'asc'); }
-  return { sortRows: sortRows, compareValues: compareValues, nextDir: nextDir };
+  function sortIndex(count, valueAt, dir) {
+    var sign = dir === 'desc' ? -1 : 1, i, order = new Array(count);
+    for (i = 0; i < count; i++) order[i] = i;
+    var numeric = true, probe = Math.min(count, 64);
+    for (i = 0; i < probe; i++) { var pv = valueAt(i); if (pv != null && pv !== '' && typeof pv !== 'number') { numeric = false; break; } }
+    if (numeric) {
+      var nv = new Float64Array(count), empty = new Uint8Array(count);
+      for (i = 0; i < count; i++) {
+        var v = valueAt(i);
+        if (v == null || v === '' || typeof v !== 'number' || v !== v) empty[i] = 1;
+        else nv[i] = v;
+      }
+      order.sort(function (a, b) {
+        if (empty[a] !== empty[b]) return empty[a] ? 1 : -1;
+        var d = nv[a] - nv[b];
+        return d !== 0 ? d * sign : a - b;
+      });
+      return order;
+    }
+    var key = new Array(count), uniq = new Map(), list = [];
+    for (i = 0; i < count; i++) {
+      var s = valueAt(i);
+      s = s == null ? '' : String(s);
+      key[i] = s;
+      if (s !== '' && !uniq.has(s)) { uniq.set(s, 0); list.push(s); }
+    }
+    list.sort(collator.compare);
+    var rk = 0;
+    for (i = 0; i < list.length; i++) { if (i && collator.compare(list[i - 1], list[i]) !== 0) rk++; uniq.set(list[i], rk); }
+    var ranks = new Int32Array(count);
+    for (i = 0; i < count; i++) ranks[i] = key[i] === '' ? -1 : uniq.get(key[i]);
+    order.sort(function (a, b) {
+      var ra = ranks[a], rb = ranks[b];
+      if ((ra < 0) !== (rb < 0)) return ra < 0 ? 1 : -1;
+      var d = ra - rb;
+      return d !== 0 ? d * sign : a - b;
+    });
+    return order;
+  }
+  function sortRowsFast(rows, key, dir, accessor) {
+    if (!key || !dir) return rows.slice();
+    var order = sortIndex(rows.length, function (i) { return accessor(rows[i], key); }, dir);
+    var out = new Array(rows.length);
+    for (var i = 0; i < order.length; i++) out[i] = rows[order[i]];
+    return out;
+  }
+  return { sortRows: sortRowsFast, sortRowsLegacy: sortRows, sortIndex: sortIndex, compareValues: compareValues, nextDir: nextDir };
+})();
+
+var Pack = (function () {
+  'use strict';
+  var STR = ['code', 'name', 'job', 'dept', 'notes'], NUMS = ['daysWorked', 'penaltyRate', 'manualFactor', 'overrideValue'];
+  var cache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function dict(values) {
+    var map = new Map(), keys = [], idx = new Uint32Array(values.length);
+    for (var i = 0; i < values.length; i++) {
+      var v = values[i] == null ? '' : values[i];
+      var k = map.get(v);
+      if (k === undefined) { k = keys.length; map.set(v, k); keys.push(v); }
+      idx[i] = k;
+    }
+    return { keys: keys, idx: idx };
+  }
+  function people(list) {
+    if (!Array.isArray(list)) return null;
+    if (cache) { var hit = cache.get(list); if (hit) return hit; }
+    var n = list.length, out = { kind: 'qisma.cols', v: 1, n: n }, i, f;
+    var seq = true;
+    for (i = 0; i < n; i++) if (list[i].id !== i + 1) { seq = false; break; }
+    out.id = seq ? null : list.map(function (p) { return p.id; });
+    STR.forEach(function (k) { var a = new Array(n); for (i = 0; i < n; i++) a[i] = list[i][k] || ''; out[k] = a; });
+    out.tier = dict(list.map(function (p) { return p.tier || ''; }));
+    out.pinnedPool = dict(list.map(function (p) { return p.pinnedPool || ''; }));
+    NUMS.forEach(function (k) { var a = new Float64Array(n); for (i = 0; i < n; i++) { var v = list[i][k]; a[i] = v == null ? NaN : v; } out[k] = a; });
+    f = new Uint8Array(n);
+    for (i = 0; i < n; i++) if (list[i].excluded) f[i] = 1;
+    out.excluded = f;
+    if (cache) cache.set(list, out);
+    return out;
+  }
+  function unpeople(c) {
+    if (!c || c.kind !== 'qisma.cols') return c;
+    var n = c.n, out = new Array(n);
+    function num(a, i) { var v = a[i]; return v == null || v !== v ? null : v; }
+    var tierK = c.tier.keys, tierI = c.tier.idx, pinK = c.pinnedPool.keys, pinI = c.pinnedPool.idx;
+    for (var i = 0; i < n; i++) {
+      var pin = pinK[pinI[i]];
+      out[i] = {
+        id: c.id ? c.id[i] : i + 1, code: c.code[i] || '', name: c.name[i] || '', job: c.job[i] || '', dept: c.dept[i] || '', tier: tierK[tierI[i]] || '',
+        daysWorked: num(c.daysWorked, i), penaltyRate: num(c.penaltyRate, i), manualFactor: num(c.manualFactor, i), overrideValue: num(c.overrideValue, i),
+        pinnedPool: pin ? pin : null, excluded: !!c.excluded[i], notes: c.notes[i] || ''
+      };
+    }
+    if (cache) cache.set(out, c);
+    return out;
+  }
+  function toJson(c) {
+    var o = {};
+    Object.keys(c).forEach(function (k) {
+      var v = c[k];
+      if (v && v.idx) o[k] = { keys: v.keys, idx: Array.prototype.slice.call(v.idx) };
+      else if (ArrayBuffer.isView(v)) o[k] = Array.prototype.map.call(v, function (x) { return x !== x ? null : x; });
+      else o[k] = v;
+    });
+    return o;
+  }
+  return { people: people, unpeople: unpeople, toJson: toJson };
+})();
+
+var IDB = (function () {
+  'use strict';
+  var NAME = 'qisma', STORE = 'kv', dbp = null;
+  function open() {
+    if (dbp) return dbp;
+    dbp = new Promise(function (resolve, reject) {
+      if (typeof indexedDB === 'undefined') { reject(new Error('no-idb')); return; }
+      var req;
+      try { req = indexedDB.open(NAME, 1); } catch (e) { reject(e); return; }
+      req.onupgradeneeded = function () { req.result.createObjectStore(STORE); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+      req.onblocked = function () { reject(new Error('blocked')); };
+    });
+    dbp.catch(function () { dbp = null; });
+    return dbp;
+  }
+  function tx(mode, fn) {
+    return open().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var t = db.transaction(STORE, mode), out;
+        t.oncomplete = function () { resolve(out); };
+        t.onerror = t.onabort = function () { reject(t.error); };
+        out = fn(t.objectStore(STORE));
+        if (out && 'onsuccess' in out) { var r = out; r.onsuccess = function () { out = r.result; }; }
+      });
+    });
+  }
+  return {
+    get: function (k) { return tx('readonly', function (s) { return s.get(k); }); },
+    put: function (k, v) { return tx('readwrite', function (s) { s.put(v, k); }); },
+    del: function (k) { return tx('readwrite', function (s) { s.delete(k); }); },
+    available: function () { return typeof indexedDB !== 'undefined'; }
+  };
+})();
+
+var Busy = (function () {
+  'use strict';
+  var host = null, label = null, depth = 0, timer = null;
+  function ensure() {
+    if (host) return;
+    host = document.createElement('div');
+    host.className = 'busy';
+    host.setAttribute('role', 'status');
+    host.setAttribute('aria-live', 'polite');
+    host.hidden = true;
+    var card = document.createElement('div');
+    card.className = 'busy-card';
+    var spin = document.createElement('span');
+    spin.className = 'busy-spin';
+    label = document.createElement('span');
+    label.className = 'busy-label';
+    card.appendChild(spin);
+    card.appendChild(label);
+    host.appendChild(card);
+    document.body.appendChild(host);
+  }
+  function show(text) { ensure(); label.textContent = text || 'لحظة…'; depth++; clearTimeout(timer); timer = setTimeout(function () { if (depth) host.hidden = false; }, 120); }
+  function hide() { depth = Math.max(0, depth - 1); if (!depth && host) { clearTimeout(timer); host.hidden = true; } }
+  function run(text, fn) {
+    return new Promise(function (resolve, reject) {
+      ensure(); label.textContent = text || 'لحظة…'; depth++; host.hidden = false;
+      requestAnimationFrame(function () {
+        setTimeout(function () {
+          try { var v = fn(); depth = Math.max(0, depth - 1); if (!depth) host.hidden = true; resolve(v); }
+          catch (e) { depth = Math.max(0, depth - 1); if (!depth) host.hidden = true; reject(e); }
+        }, 0);
+      });
+    });
+  }
+  function maybe(size, text, fn) { return size > 30000 ? run(text, fn) : Promise.resolve(fn()); }
+  return { show: show, hide: hide, run: run, maybe: maybe, set: function (t) { if (label) label.textContent = t; } };
 })();
 
 var Store = (function () {
@@ -422,12 +629,39 @@ var Store = (function () {
     res.bytes = text.length;
     return res;
   }
+  var BIG_ROWS = 15000;
+  function isBig(payload) {
+    return !!payload && ((payload.people && payload.people.length > BIG_ROWS) || (payload.sourceGrid && payload.sourceGrid.length > BIG_ROWS));
+  }
+  function saveBig(payload, onResult) {
+    var body = {};
+    Object.keys(payload).forEach(function (k) { body[k] = payload[k]; });
+    body.people = Pack.people(payload.people || []);
+    body.sourceGrid = null;
+    body.rawDropped = !!(payload.sourceGrid && payload.sourceGrid.length);
+    body.schemaVersion = SCHEMA; body.appVersion = APP_VERSION; body.savedAt = Date.now();
+    var stub = JSON.stringify({ schemaVersion: SCHEMA, appVersion: APP_VERSION, savedAt: body.savedAt, inIdb: true, fileName: payload.fileName, count: (payload.people || []).length, screen: payload.screen });
+    IDB.put('session', body).then(function () {
+      writeRaw(KEYS.session, stub);
+      if (onResult) onResult({ ok: true, idb: true, lean: body.rawDropped && false });
+    }, function () {
+      if (onResult) onResult({ ok: false, quota: true });
+    });
+  }
+  function loadBig() {
+    return IDB.get('session').then(function (s) {
+      if (!s) return null;
+      if (s.people && s.people.kind === 'qisma.cols') { s.people = Pack.unpeople(s.people); s.__packed = true; }
+      return s;
+    });
+  }
   var timers = Object.create(null), pending = Object.create(null);
   function clear(name) {
     clearTimeout(timers[name]);
     delete pending[name];
     timers[name] = null;
     removeRaw(KEYS[name]);
+    if (name === 'session' && IDB.available()) IDB.del('session').catch(function () {});
   }
   function clearAll() { Object.keys(KEYS).forEach(function (n) { clear(n); }); }
   function usage() {
@@ -444,6 +678,8 @@ var Store = (function () {
     var payload;
     try { payload = task.getPayload(); } catch (e) { return; }
     if (payload == null) return;
+    if (name === 'session' && isBig(payload) && IDB.available()) { saveBig(payload, task.onResult); return; }
+    if (name === 'session') IDB.del('session').catch(function () {});
     var res = save(name, payload);
     if (task.onResult) task.onResult(res);
   }
@@ -465,7 +701,13 @@ var Store = (function () {
       if (!scope.people && (k === 'people' || k === 'rawRows' || k === 'headers' || k === 'mapping' || k === 'sourceGrid' || k === 'headerRow' || k === 'baseline')) return;
       if (state[k] !== undefined) out[k] = state[k];
     });
-    return JSON.stringify({ kind: 'qisma.bundle', schemaVersion: SCHEMA, appVersion: APP_VERSION, exportedAt: new Date().toISOString(), state: out }, null, 2);
+    var big = out.people && out.people.length > BIG_ROWS;
+    if (big) {
+      out.people = Pack.toJson(Pack.people(out.people));
+      if (out.sourceGrid && out.sourceGrid.length > BIG_ROWS) { out.sourceGrid = []; out.rawDropped = true; }
+      delete out.rawRows;
+    }
+    return JSON.stringify({ kind: 'qisma.bundle', schemaVersion: SCHEMA, appVersion: APP_VERSION, exportedAt: new Date().toISOString(), state: out }, null, big ? 0 : 2);
   }
   function deserializeBundle(input) {
     var obj = input;
@@ -484,12 +726,13 @@ var Store = (function () {
       if (s.ui) st.ui = s.ui;
     } else return { ok: false, error: 'هذا الملف ليس نسخة أو إعدادات من قِسمة' };
     if (!st || typeof st !== 'object') return { ok: false, error: 'الملف لا يحتوي على بيانات' };
+    if (st.people && st.people.kind === 'qisma.cols') st.people = Pack.unpeople(st.people);
     return { ok: true, kind: kind, state: st, schemaVersion: v == null ? 1 : Number(v), appVersion: obj.appVersion || null };
   }
 
   return {
     SCHEMA: SCHEMA, KEYS: KEYS, load: load, save: save, clear: clear, clearAll: clearAll, usage: usage,
-    debouncedSave: debouncedSave, flushAll: flushAll, hasPending: hasPending,
+    debouncedSave: debouncedSave, flushAll: flushAll, hasPending: hasPending, loadBig: loadBig, BIG_ROWS: BIG_ROWS,
     serializeBundle: serializeBundle, deserializeBundle: deserializeBundle,
     isAvailable: probe, unavailableReason: function () { probe(); return reason; }
   };

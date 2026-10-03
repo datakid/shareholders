@@ -1,9 +1,10 @@
 var Engine = (function () {
   'use strict';
 
-  var ENGINE_VERSION = 4;
+  var ENGINE_VERSION = 5;
   var ROUNDING_STEPS = [1, 5, 10, 25, 50, 100, 500, 1000];
   var DEFAULT_OPTIONS = { roundingStep: 1, roundingTarget: 'gross', allocation: 'assign', weighting: 'tier', attendance: 'prorata', capNet: null };
+  var WARN_LIMIT = 1000;
 
   function now() {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -41,9 +42,11 @@ var Engine = (function () {
     return ch.toLowerCase();
   }
 
+  var ASCII_RE = /^[\x00-\x7F]*$/;
   function normalizeArabic(input) {
     if (input == null) return '';
     var s = String(input), out = '';
+    if (ASCII_RE.test(s)) return s.toLowerCase().replace(/\s+/g, ' ').trim();
     for (var i = 0; i < s.length; i++) out += foldChar(s[i]);
     return out.replace(/\s+/g, ' ').trim();
   }
@@ -71,10 +74,80 @@ var Engine = (function () {
     return { norm: norm, idx: idx };
   }
 
-  function normalizeLoose(input) { return normMap(input).norm; }
+  function isSpaceCode(c) {
+    return c === 32 || (c >= 9 && c <= 13) || c === 160 || c === 0x1680 || (c >= 0x2000 && c <= 0x200A) || c === 0x2028 || c === 0x2029 || c === 0x202F || c === 0x205F || c === 0x3000 || c === 0xFEFF;
+  }
+  var LBUF = [];
+  function looseFast(raw) {
+    var n = raw.length, buf = LBUF, len = 0, lastSpace = true;
+    for (var i = 0; i < n; i++) {
+      var c = raw.charCodeAt(i);
+      if (c < 128) {
+        if (c >= 65 && c <= 90) c += 32;
+        if ((c >= 97 && c <= 122) || (c >= 48 && c <= 57)) { buf[len++] = c; lastSpace = false; }
+        else if (c === 32 || (c >= 9 && c <= 13)) { if (!lastSpace) { buf[len++] = 32; lastSpace = true; } }
+        continue;
+      }
+      if (c >= 0x0600 && c <= 0x06FF) {
+        if (isMark(c)) continue;
+        if (c === 0x623 || c === 0x625 || c === 0x622 || c === 0x671) c = 0x627;
+        else if (c === 0x629) c = 0x647;
+        else if (c === 0x649 || c === 0x626 || c === 0x6CC) c = 0x64A;
+        else if (c === 0x624) c = 0x648;
+        else if (c === 0x6A9) c = 0x643;
+        else if (c >= 0x660 && c <= 0x669) c = 48 + c - 0x660;
+        else if (c >= 0x6F0 && c <= 0x6F9) c = 48 + c - 0x6F0;
+        buf[len++] = c; lastSpace = false;
+        continue;
+      }
+      if (c >= 0xFEF5 && c <= 0xFEFC) { buf[len++] = 0x644; buf[len++] = 0x627; lastSpace = false; continue; }
+      if (isSpaceCode(c)) { if (!lastSpace) { buf[len++] = 32; lastSpace = true; } continue; }
+      var low = String.fromCharCode(c).toLowerCase();
+      for (var j = 0; j < low.length; j++) {
+        var d = low.charCodeAt(j);
+        if ((d >= 97 && d <= 122) || (d >= 48 && d <= 57) || (d >= 0x0600 && d <= 0x06FF)) { buf[len++] = d; lastSpace = false; }
+      }
+    }
+    while (len && buf[len - 1] === 32) len--;
+    if (!len) return '';
+    if (len <= 2048) return String.fromCharCode.apply(null, len === buf.length ? buf : buf.slice(0, len));
+    var out = '';
+    for (var k = 0; k < len; k += 2048) out += String.fromCharCode.apply(null, buf.slice(k, Math.min(len, k + 2048)));
+    return out;
+  }
+
+  var LOOSE = new Map(), TIERM = new Map(), MEMO_MAX = 200000;
+  function normalizeLoose(input) {
+    if (input == null || input === '') return '';
+    var k = typeof input === 'string' ? input : String(input);
+    var v = LOOSE.get(k);
+    if (v !== undefined) return v;
+    v = looseFast(k);
+    if (LOOSE.size > MEMO_MAX) LOOSE.clear();
+    LOOSE.set(k, v);
+    return v;
+  }
+
+  var NAME_KEY = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function nameKey(p) {
+    if (!p || typeof p !== 'object') return '';
+    if (!NAME_KEY) return p.name ? looseFast(String(p.name)) : '';
+    var v = NAME_KEY.get(p);
+    if (v === undefined) { v = p.name ? looseFast(String(p.name)) : ''; NAME_KEY.set(p, v); }
+    return v;
+  }
 
   function normalizeForTierMatch(input) {
-    var raw = String(input == null ? '' : input).trim();
+    var key = input == null ? '' : String(input);
+    var hit = TIERM.get(key);
+    if (hit !== undefined) return hit;
+    hit = tierMatchRaw(key);
+    if (TIERM.size > MEMO_MAX) TIERM.clear();
+    TIERM.set(key, hit);
+    return hit;
+  }
+  function tierMatchRaw(input) {
+    var raw = input.trim();
     var tokens = raw.split(/\s+/);
     return normalizeLoose(tokens.map(function (token) {
       var loose = normalizeLoose(token);
@@ -177,55 +250,113 @@ var Engine = (function () {
     return { budgets: budgets, effectiveGross: effective, N: N, names: names };
   }
 
-  function apportion(total, members) {
-    var n = members.length, alloc = new Array(n), i;
-    for (i = 0; i < n; i++) alloc[i] = 0;
-    if (!(total > 0) || n === 0) return { alloc: alloc, left: total > 0 ? total : 0 };
-    var active = [];
-    for (i = 0; i < n; i++) {
-      var m = members[i];
-      if (m.weight > 0 && (m.cap == null || m.cap > 0)) active.push(i);
-    }
-    var remaining = total, W = 0, a;
-    for (;;) {
-      W = 0;
-      for (a = 0; a < active.length; a++) W += members[active[a]].weight;
-      if (!(W > 0)) break;
-      var keep = [], fixedNow = 0;
-      for (a = 0; a < active.length; a++) {
-        var ix = active[a], mm = members[ix];
-        if (mm.cap != null && remaining * mm.weight / W >= mm.cap) { alloc[ix] = mm.cap; fixedNow += mm.cap; }
-        else keep.push(ix);
+  var BUCKETS = new Int32Array(65537);
+  function apportionT(total, w, cap, rank, alloc) {
+    var n = w.length, i, a;
+    alloc.fill(0);
+    if (!(total > 0) || n === 0) return total > 0 ? total : 0;
+    var active = new Int32Array(n), na = 0;
+    for (i = 0; i < n; i++) if (w[i] > 0 && (!cap || cap[i] !== 0)) active[na++] = i;
+    var remaining = total, W = 0;
+    if (cap) {
+      for (;;) {
+        W = 0;
+        for (a = 0; a < na; a++) W += w[active[a]];
+        if (!(W > 0)) break;
+        var keep = 0, fixedNow = 0;
+        for (a = 0; a < na; a++) {
+          var ix = active[a], c = cap[ix];
+          if (c >= 0 && remaining * w[ix] / W >= c) { alloc[ix] = c; fixedNow += c; }
+          else active[keep++] = ix;
+        }
+        if (fixedNow === 0 && keep === na) break;
+        remaining -= fixedNow;
+        na = keep;
+        if (!na) break;
       }
-      if (fixedNow === 0 && keep.length === active.length) break;
-      remaining -= fixedNow;
-      active = keep;
-      if (!active.length) break;
+    } else {
+      for (a = 0; a < na; a++) W += w[active[a]];
     }
-    if (!active.length || !(W > 0) || remaining <= 0) return { alloc: alloc, left: Math.max(0, remaining) };
-    var parts = [], floorSum = 0;
-    for (a = 0; a < active.length; a++) {
-      var idx = active[a], mem = members[idx];
-      var r = remaining * mem.weight / W;
+    if (!na || !(W > 0) || remaining <= 0) return Math.max(0, remaining);
+    var frac = new Float64Array(na), floorSum = 0;
+    for (a = 0; a < na; a++) {
+      var idx = active[a];
+      var r = remaining * w[idx] / W;
       var f = Math.floor(r);
-      if (mem.cap != null && f > mem.cap) f = mem.cap;
+      if (cap && cap[idx] >= 0 && f > cap[idx]) f = cap[idx];
       alloc[idx] = f;
       floorSum += f;
-      parts.push({ idx: idx, frac: r - f, weight: mem.weight, id: mem.id });
+      frac[a] = r - f;
     }
     var rem = remaining - floorSum;
-    parts.sort(function (x, y) {
-      if (Math.abs(y.frac - x.frac) > 1e-9) return y.frac - x.frac;
-      if (y.weight !== x.weight) return y.weight - x.weight;
-      return compareIds(x.id, y.id);
-    });
-    var k = 0, guard = 0, limit = parts.length * 3 + 3;
-    while (rem > 0 && guard < limit) {
-      var e = parts[k % parts.length], cap = members[e.idx].cap;
-      if (cap == null || alloc[e.idx] < cap) { alloc[e.idx]++; rem--; }
-      k++; guard++;
+    if (rem <= 0) return rem;
+    function better(x, y) {
+      var fx = frac[x], fy = frac[y];
+      if (Math.abs(fy - fx) > 1e-9) return fy - fx;
+      var ax = active[x], ay = active[y];
+      if (w[ay] !== w[ax]) return w[ay] - w[ax];
+      return rank ? rank[ax] - rank[ay] : ax - ay;
     }
-    return { alloc: alloc, left: rem };
+    function eligible(x) { var ix = active[x]; return !cap || !(cap[ix] >= 0) || alloc[ix] < cap[ix]; }
+    if (rem >= na || cap) {
+      var all = [];
+      for (a = 0; a < na; a++) all.push(a);
+      all.sort(better);
+      var k = 0, guard = 0, limit = na * 3 + 3;
+      while (rem > 0 && guard < limit) {
+        var e = all[k % na];
+        if (eligible(e)) { alloc[active[e]]++; rem--; }
+        k++; guard++;
+      }
+      return rem;
+    }
+    var B = na < 2048 ? 64 : 65536, counts = BUCKETS;
+    counts.fill(0, 0, B + 1);
+    var bucketOf = new Uint32Array(na);
+    for (a = 0; a < na; a++) {
+      var bk = Math.floor((1 - frac[a]) * B);
+      if (bk < 0) bk = 0; else if (bk >= B) bk = B - 1;
+      bucketOf[a] = bk;
+      counts[bk]++;
+    }
+    var cum = 0, tb = 0;
+    for (tb = 0; tb < B; tb++) { if (cum + counts[tb] >= rem) break; cum += counts[tb]; }
+    var tie = [];
+    for (a = 0; a < na; a++) {
+      var bb = bucketOf[a];
+      if (bb < tb) { alloc[active[a]]++; rem--; }
+      else if (bb === tb) tie.push(a);
+    }
+    tie.sort(better);
+    for (var t = 0; t < tie.length && rem > 0; t++) {
+      if (eligible(tie[t])) { alloc[active[tie[t]]]++; rem--; }
+    }
+    return rem;
+  }
+
+  function rankOfIds(ids) {
+    var n = ids.length, rank = new Int32Array(n), mono = true;
+    for (var i = 0; i < n; i++) {
+      if (typeof ids[i] !== 'number' || (i && !(ids[i] > ids[i - 1]))) { mono = false; break; }
+    }
+    if (mono) { for (var j = 0; j < n; j++) rank[j] = j; return rank; }
+    var order = new Array(n);
+    for (var k = 0; k < n; k++) order[k] = k;
+    order.sort(function (a, b) { return compareIds(ids[a], ids[b]) || a - b; });
+    for (var m = 0; m < n; m++) rank[order[m]] = m;
+    return rank;
+  }
+
+  function apportion(total, members) {
+    var n = members.length, w = new Float64Array(n), cap = null, ids = new Array(n);
+    for (var i = 0; i < n; i++) {
+      w[i] = members[i].weight;
+      ids[i] = members[i].id;
+      if (members[i].cap != null) { if (!cap) { cap = new Float64Array(n); cap.fill(-1); } cap[i] = members[i].cap; }
+    }
+    var out = new Float64Array(n);
+    var left = apportionT(total, w, cap, rankOfIds(ids), out);
+    return { alloc: Array.prototype.slice.call(out), left: left };
   }
 
   function distributePoolPiastres(grossPiastres, members) {
@@ -239,86 +370,121 @@ var Engine = (function () {
     return res.alloc;
   }
 
-  function assignItemsToPools(items, targets, opts) {
-    opts = opts || {};
-    var poolNames = Object.keys(targets);
-    var eligible = poolNames.filter(function (p) { return targets[p] > 0; });
-    var assignment = {}, current = {}, count = {};
-    poolNames.forEach(function (p) { current[p] = 0; count[p] = 0; });
-    var free = [];
-    items.forEach(function (it) {
-      if (it.pinnedPool != null) {
-        assignment[it.id] = it.pinnedPool;
-        current[it.pinnedPool] = (current[it.pinnedPool] || 0) + it.weight;
-        count[it.pinnedPool] = (count[it.pinnedPool] || 0) + 1;
-      } else free.push(it);
-    });
-    free.sort(function (a, b) { return (b.weight - a.weight) || compareIds(a.id, b.id); });
-    if (!eligible.length) {
-      free.forEach(function (it) {
-        var fb = poolNames[0] || null;
-        assignment[it.id] = fb;
-        if (fb) { current[fb] += it.weight; count[fb]++; }
-      });
-      return { assignment: assignment, current: current, iterations: 0, converged: true, passes: 0 };
+  function orderByWeightDesc(free, nf, w, rank) {
+    var distinct = new Map(), list = [], i;
+    for (i = 0; i < nf; i++) {
+      var x = w[free[i]];
+      if (!distinct.has(x)) { distinct.set(x, 0); list.push(x); if (list.length > 65536) break; }
     }
-    free.forEach(function (it) {
-      var best = eligible[0], bestDef = targets[best] - current[best];
-      for (var k = 1; k < eligible.length; k++) {
-        var p = eligible[k], d = targets[p] - current[p];
-        if (d > bestDef) { bestDef = d; best = p; }
-      }
-      assignment[it.id] = best;
-      current[best] += it.weight;
-      count[best]++;
-    });
-    var n = free.length;
-    var swapWindow = opts.swapWindow != null ? opts.swapWindow : (n > 6000 ? 6 : (n > 1500 ? 12 : 24));
-    var maxPasses = opts.maxPasses != null ? opts.maxPasses : 60;
+    var out = new Int32Array(nf);
+    if (list.length > 65536) {
+      var arr = Array.prototype.slice.call(free.subarray(0, nf));
+      arr.sort(function (a, b) { return (w[b] - w[a]) || (rank[a] - rank[b]); });
+      for (i = 0; i < nf; i++) out[i] = arr[i];
+      return out;
+    }
+    list.sort(function (a, b) { return b - a; });
+    for (i = 0; i < list.length; i++) distinct.set(list[i], i);
+    var byRank = Array.prototype.slice.call(free.subarray(0, nf));
+    var sortedAlready = true;
+    for (i = 1; i < nf; i++) if (rank[byRank[i]] < rank[byRank[i - 1]]) { sortedAlready = false; break; }
+    if (!sortedAlready) byRank.sort(function (a, b) { return rank[a] - rank[b]; });
+    var start = new Int32Array(list.length + 1);
+    var ord = new Int32Array(nf);
+    for (i = 0; i < nf; i++) { ord[i] = distinct.get(w[byRank[i]]); start[ord[i] + 1]++; }
+    for (i = 0; i < list.length; i++) start[i + 1] += start[i];
+    for (i = 0; i < nf; i++) out[start[ord[i]]++] = byRank[i];
+    return out;
+  }
+
+  function assignCore(w, pin, rank, targets) {
+    var m = w.length, P = targets.length, i, p;
+    var pool = new Int32Array(m), current = new Float64Array(P), count = new Int32Array(P);
+    var eligible = [];
+    for (p = 0; p < P; p++) if (targets[p] > 0) eligible.push(p);
+    var E = eligible.length;
+    var freeRaw = new Int32Array(m), nf = 0;
+    for (i = 0; i < m; i++) {
+      if (pin[i] >= 0) { pool[i] = pin[i]; current[pin[i]] += w[i]; count[pin[i]]++; }
+      else freeRaw[nf++] = i;
+    }
+    var free = orderByWeightDesc(freeRaw, nf, w, rank);
+    if (!E) {
+      for (i = 0; i < nf; i++) { var it0 = free[i]; pool[it0] = P ? 0 : -1; if (P) { current[0] += w[it0]; count[0]++; } }
+      return { pool: pool, current: current, iterations: 0, converged: true, passes: 0 };
+    }
+    for (i = 0; i < nf; i++) {
+      var it = free[i], best = eligible[0], bestDef = targets[best] - current[best];
+      for (var k = 1; k < E; k++) { var q = eligible[k], d = targets[q] - current[q]; if (d > bestDef) { bestDef = d; best = q; } }
+      pool[it] = best; current[best] += w[it]; count[best]++;
+    }
+    var n = nf;
+    var swapWindow = n > 400000 ? 3 : (n > 60000 ? 6 : (n > 6000 ? 8 : (n > 1500 ? 12 : 24)));
+    var maxPasses = n > 400000 ? 8 : (n > 60000 ? 16 : 60);
     var iterations = 0, pass = 0, moved = true;
-    function cost(p, v) { return Math.abs(v - targets[p]); }
     while (moved && pass < maxPasses) {
       pass++;
       moved = false;
       for (var fi = 0; fi < n; fi++) {
         iterations++;
-        var it = free[fi], from = assignment[it.id];
+        var item = free[fi], from = pool[item], wi = w[item];
         if (count[from] <= 1 && targets[from] > 0) continue;
-        var bestGain = -1e-9, bestPool = null;
-        var baseFrom = cost(from, current[from]);
-        var afterFrom = cost(from, current[from] - it.weight);
-        for (var pi = 0; pi < eligible.length; pi++) {
-          var to = eligible[pi];
+        var bestGain = -1e-9, bestPool = -1;
+        var baseFrom = Math.abs(current[from] - targets[from]);
+        var afterFrom = Math.abs(current[from] - wi - targets[from]);
+        for (var e = 0; e < E; e++) {
+          var to = eligible[e];
           if (to === from) continue;
-          var delta = (afterFrom - baseFrom) + (cost(to, current[to] + it.weight) - cost(to, current[to]));
+          var delta = (afterFrom - baseFrom) + (Math.abs(current[to] + wi - targets[to]) - Math.abs(current[to] - targets[to]));
           if (delta < bestGain) { bestGain = delta; bestPool = to; }
         }
-        if (bestPool) {
-          current[from] -= it.weight; count[from]--;
-          current[bestPool] += it.weight; count[bestPool]++;
-          assignment[it.id] = bestPool;
+        if (bestPool >= 0) {
+          current[from] -= wi; count[from]--;
+          current[bestPool] += wi; count[bestPool]++;
+          pool[item] = bestPool;
           moved = true;
         }
       }
       for (var a = 0; a < n; a++) {
-        var A = free[a], poolA = assignment[A.id];
+        var A = free[a], poolA = pool[A], wA = w[A];
         var lim = Math.min(n, a + 1 + swapWindow);
         for (var b = a + 1; b < lim; b++) {
           iterations++;
-          var B = free[b], poolB = assignment[B.id];
-          if (poolA === poolB || A.weight === B.weight) continue;
-          var nA = current[poolA] - A.weight + B.weight;
-          var nB = current[poolB] - B.weight + A.weight;
-          if (cost(poolA, nA) + cost(poolB, nB) < cost(poolA, current[poolA]) + cost(poolB, current[poolB]) - 1e-9) {
+          var Bi = free[b], poolB = pool[Bi], wB = w[Bi];
+          if (poolA === poolB || wA === wB) continue;
+          var nA = current[poolA] - wA + wB;
+          var nB = current[poolB] - wB + wA;
+          if (Math.abs(nA - targets[poolA]) + Math.abs(nB - targets[poolB]) < Math.abs(current[poolA] - targets[poolA]) + Math.abs(current[poolB] - targets[poolB]) - 1e-9) {
             current[poolA] = nA; current[poolB] = nB;
-            assignment[A.id] = poolB; assignment[B.id] = poolA;
+            pool[A] = poolB; pool[Bi] = poolA;
             poolA = poolB;
             moved = true;
           }
         }
       }
     }
-    return { assignment: assignment, current: current, iterations: iterations, converged: !moved, passes: pass };
+    return { pool: pool, current: current, iterations: iterations, converged: !moved, passes: pass };
+  }
+
+  function assignItemsToPools(items, targets) {
+    var names = Object.keys(targets), index = Object.create(null);
+    names.forEach(function (nm, i) { index[nm] = i; });
+    var m = items.length, w = new Float64Array(m), pin = new Int32Array(m), ids = new Array(m);
+    var extra = names.slice();
+    items.forEach(function (it, i) {
+      w[i] = it.weight; ids[i] = it.id;
+      if (it.pinnedPool != null) {
+        if (!(it.pinnedPool in index)) { index[it.pinnedPool] = extra.length; extra.push(it.pinnedPool); }
+        pin[i] = index[it.pinnedPool];
+      } else pin[i] = -1;
+    });
+    var t = new Float64Array(extra.length);
+    names.forEach(function (nm, i) { t[i] = targets[nm]; });
+    var r = assignCore(w, pin, rankOfIds(ids), t);
+    var assignment = {}, current = {};
+    items.forEach(function (it, i) { assignment[it.id] = r.pool[i] >= 0 ? extra[r.pool[i]] : null; });
+    extra.forEach(function (nm, i) { current[nm] = r.current[i]; });
+    return { assignment: assignment, current: current, iterations: r.iterations, converged: r.converged, passes: r.passes };
   }
 
   function validateState(state) {
@@ -332,143 +498,164 @@ var Engine = (function () {
       if (!(isNum(p.gross) && p.gross >= 0)) errors.push({ code: 'BAD_GROSS', poolName: name, message: 'إجمالي مجمع "' + name + '" يجب أن يكون رقمًا غير سالب' });
     });
     if (!(isNum(state.periodDays) && state.periodDays >= 1)) errors.push({ code: 'BAD_PERIOD_DAYS', message: 'عدد أيام الفترة يجب أن يكون 1 على الأقل' });
-    var seen = Object.create(null);
-    (state.people || []).forEach(function (person) {
-      var key = typeof person.id + ':' + person.id;
-      if (seen[key]) errors.push({ code: 'DUPLICATE_ID', personId: person.id, message: 'رقم الصف ' + person.id + ' مكرر' });
-      seen[key] = true;
-      var pinned = normalizePinnedPool(person.pinnedPool);
-      if (pinned != null && !hasOwn(pools, pinned)) {
-        errors.push({ code: 'UNKNOWN_PINNED_POOL', personId: person.id, poolName: pinned, message: 'المجمع المثبّت "' + pinned + '" غير موجود لـ "' + (person.name || person.id) + '"' });
+    var seenN = new Set(), seenS = new Set(), people = state.people || [], dup = 0, unk = 0;
+    for (var i = 0; i < people.length; i++) {
+      var person = people[i], id = person.id;
+      var set = typeof id === 'number' ? seenN : seenS, key = typeof id === 'number' ? id : typeof id + ':' + id;
+      if (set.has(key)) { if (dup++ < 50) errors.push({ code: 'DUPLICATE_ID', personId: id, message: 'رقم الصف ' + id + ' مكرر' }); }
+      else set.add(key);
+      var pinned = person.pinnedPool;
+      if (pinned != null && pinned !== '' && !hasOwn(pools, pinned)) {
+        if (unk++ < 50) errors.push({ code: 'UNKNOWN_PINNED_POOL', personId: id, poolName: pinned, message: 'المجمع المثبّت "' + pinned + '" غير موجود لـ "' + (person.name || id) + '"' });
       }
-    });
+    }
+    if (dup > 50) errors.push({ code: 'DUPLICATE_ID', message: 'و' + (dup - 50) + ' رقم صف مكرر آخر' });
+    if (unk > 50) errors.push({ code: 'UNKNOWN_PINNED_POOL', message: 'و' + (unk - 50) + ' تثبيت آخر على مجمع غير موجود' });
     return errors;
   }
 
-  function collectRowWarnings(state, options) {
-    var o = normalizeOptions(options || state.options);
-    var warnings = [];
-    var periodDays = state.periodDays;
-    var tiers = state.tiers || {};
-    var names = Object.create(null);
-    var overrideIgnored = 0;
-    (state.people || []).forEach(function (person) {
-      var label = person.name || ('صف ' + person.id);
-      var nm = normalizeLoose(person.name);
-      if (!nm) warnings.push({ code: 'MISSING_NAME', personId: person.id, message: 'صف بدون اسم (رقم ' + person.id + ')' });
+  var FLAG_BITS = { MISSING_NAME: 1, DUPLICATE_NAME: 2, UNRESOLVED_TIER: 4, BAD_PENALTY: 8, BAD_DAYS: 16, BAD_MANUAL_FACTOR: 32, NEGATIVE_OVERRIDE: 64 };
+
+  function scanRows(state, o) {
+    var people = state.people || [], n = people.length;
+    var periodDays = state.periodDays, tiers = state.tiers || {};
+    var warnings = [], counts = Object.create(null), flags = new Uint8Array(n);
+    var names = new Map(), overrideIgnored = 0, tierMode = o.weighting === 'tier';
+    function push(code, i, msg) {
+      flags[i] |= FLAG_BITS[code];
+      var c = counts[code] = (counts[code] || 0) + 1;
+      if (c <= WARN_LIMIT) warnings.push({ code: code, personId: people[i].id, message: msg() });
+    }
+    for (var i = 0; i < n; i++) {
+      var person = people[i];
+      var nm = nameKey(person);
+      if (!nm) push('MISSING_NAME', i, function () { return 'صف بدون اسم (رقم ' + person.id + ')'; });
       else {
-        if (names[nm]) warnings.push({ code: 'DUPLICATE_NAME', personId: person.id, message: 'الاسم "' + person.name + '" مكرر (صف ' + names[nm] + ' وصف ' + person.id + ')' });
-        else names[nm] = person.id;
+        var first = names.get(nm);
+        if (first !== undefined) push('DUPLICATE_NAME', i, function () { return 'الاسم "' + person.name + '" مكرر (صف ' + first + ' وصف ' + person.id + ')'; });
+        else names.set(nm, person.id);
       }
-      if (!person.excluded && o.weighting === 'tier' && !hasResolvableTier(person, tiers, o)) {
-        warnings.push({ code: 'UNRESOLVED_TIER', personId: person.id, message: 'لا توجد فئة معروفة لـ "' + label + '"' + (person.tier ? ' (الفئة: ' + person.tier + ')' : '') + ' — خارج التوزيع' });
+      if (!person.excluded && tierMode && !isNum(person.overrideValue)) {
+        var t = person.tier;
+        if (t == null || t === '' || !hasOwn(tiers, t) || !isNum(tiers[t])) push('UNRESOLVED_TIER', i, function () { return 'لا توجد فئة معروفة لـ "' + (person.name || ('صف ' + person.id)) + '"' + (person.tier ? ' (الفئة: ' + person.tier + ')' : '') + ' — خارج التوزيع'; });
       }
-      if (person.penaltyRate != null && !(person.penaltyRate >= 0 && person.penaltyRate <= 1)) {
-        warnings.push({ code: 'BAD_PENALTY', personId: person.id, message: 'نسبة الجزاء خارج النطاق لـ "' + label + '" — ثُبّتت داخل 0–100%' });
-      }
-      if (person.daysWorked != null && !(person.daysWorked >= 0 && person.daysWorked <= periodDays)) {
-        warnings.push({ code: 'BAD_DAYS', personId: person.id, message: 'أيام العمل خارج الفترة لـ "' + label + '" — ثُبّتت داخل 0–' + periodDays });
-      }
-      if (person.manualFactor != null && !(person.manualFactor >= 0)) {
-        warnings.push({ code: 'BAD_MANUAL_FACTOR', personId: person.id, message: 'المعامل اليدوي غير صالح لـ "' + label + '" — استُخدم 1' });
-      }
-      if (person.overrideValue != null && person.overrideValue < 0) {
-        warnings.push({ code: 'NEGATIVE_OVERRIDE', personId: person.id, message: 'القيمة المخصصة سالبة لـ "' + label + '" — اعتُبرت صفرًا' });
-      }
-      if (o.weighting === 'equal' && person.overrideValue != null) overrideIgnored++;
+      var pr = person.penaltyRate;
+      if (pr != null && !(pr >= 0 && pr <= 1)) push('BAD_PENALTY', i, function () { return 'نسبة الجزاء خارج النطاق لـ "' + (person.name || ('صف ' + person.id)) + '" — ثُبّتت داخل 0–100%'; });
+      var dw = person.daysWorked;
+      if (dw != null && !(dw >= 0 && dw <= periodDays)) push('BAD_DAYS', i, function () { return 'أيام العمل خارج الفترة لـ "' + (person.name || ('صف ' + person.id)) + '" — ثُبّتت داخل 0–' + periodDays; });
+      var mf = person.manualFactor;
+      if (mf != null && !(mf >= 0)) push('BAD_MANUAL_FACTOR', i, function () { return 'المعامل اليدوي غير صالح لـ "' + (person.name || ('صف ' + person.id)) + '" — استُخدم 1'; });
+      var ov = person.overrideValue;
+      if (ov != null && ov < 0) push('NEGATIVE_OVERRIDE', i, function () { return 'القيمة المخصصة سالبة لـ "' + (person.name || ('صف ' + person.id)) + '" — اعتُبرت صفرًا'; });
+      if (!tierMode && ov != null) overrideIgnored++;
+    }
+    Object.keys(counts).forEach(function (code) {
+      if (counts[code] > WARN_LIMIT) warnings.push({ code: code, message: 'و' + (counts[code] - WARN_LIMIT) + ' صفًا آخر بنفس الملاحظة' });
     });
-    if (overrideIgnored) warnings.push({ code: 'OVERRIDE_IGNORED', message: Math.round(overrideIgnored) + ' قيمة مخصصة تم تجاهلها لأن طريقة الوزن «بالتساوي»' });
-    return warnings;
+    if (overrideIgnored) { counts.OVERRIDE_IGNORED = 1; warnings.push({ code: 'OVERRIDE_IGNORED', message: Math.round(overrideIgnored) + ' قيمة مخصصة تم تجاهلها لأن طريقة الوزن «بالتساوي»' }); }
+    return { warnings: warnings, counts: counts, flags: flags };
   }
 
-  function waterfill(participating, N, capPi) {
-    var dist = Object.create(null), capped = Object.create(null), W = 0;
-    participating.forEach(function (e) { dist[e.id] = e.weight; W += e.weight; });
+  function collectRowWarnings(state, options) {
+    return scanRows(state, normalizeOptions(options || state.options)).warnings;
+  }
+
+  function waterfillT(w, N, capPi) {
+    var m = w.length, dist = new Float64Array(w), capped = new Uint8Array(m), W = 0, i;
+    for (i = 0; i < m; i++) W += w[i];
     if (capPi == null || !(N > 0) || !(W > 0)) return { dist: dist, capped: capped, kPi: W > 0 ? N / W : 0, count: 0 };
-    var active = participating.slice(), fixed = 0, count = 0;
+    var active = new Int32Array(m), na = m, fixed = 0, count = 0;
+    for (i = 0; i < m; i++) active[i] = i;
     for (;;) {
-      if (!active.length) break;
+      if (!na) break;
       var Wa = 0;
-      active.forEach(function (e) { Wa += e.weight; });
-      var k = (N - fixed) / Wa;
-      var next = [];
-      active.forEach(function (e) {
-        if (k * e.weight > capPi) { capped[e.id] = true; fixed += capPi; count++; }
-        else next.push(e);
-      });
-      if (next.length === active.length) break;
-      active = next;
+      for (i = 0; i < na; i++) Wa += w[active[i]];
+      var k = (N - fixed) / Wa, keep = 0;
+      for (i = 0; i < na; i++) {
+        var ix = active[i];
+        if (k * w[ix] > capPi) { capped[ix] = 1; fixed += capPi; count++; }
+        else active[keep++] = ix;
+      }
+      if (keep === na) break;
+      na = keep;
     }
     var kPi;
-    if (active.length) {
+    if (na) {
       var Wr = 0;
-      active.forEach(function (e) { Wr += e.weight; });
+      for (i = 0; i < na; i++) Wr += w[active[i]];
       kPi = (N - fixed) / Wr;
       if (!(kPi > 0)) kPi = capPi;
-      Object.keys(capped).forEach(function (id) { dist[id] = capPi / kPi; });
+      var cd = capPi / kPi;
+      for (i = 0; i < m; i++) if (capped[i]) dist[i] = cd;
     } else {
       kPi = capPi;
-      participating.forEach(function (e) { dist[e.id] = 1; });
+      dist.fill(1);
     }
     return { dist: dist, capped: capped, kPi: kPi, count: count };
   }
 
-  function distributeNet(bd, members, step) {
-    var n = members.length, rate = bd.rate;
+  function sumArr(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i]; return s; }
+
+  function distributeNetT(bd, mem, step) {
+    var m = mem.w.length, rate = bd.rate, i;
     var units = Math.floor(bd.net / step);
     var retainedRound = bd.net - units * step;
-    var ms = members.map(function (m) { return { id: m.id, weight: m.weight, cap: m.capPi == null ? null : Math.floor(m.capPi / step) }; });
-    var ap = n ? apportion(units, ms) : { alloc: [], left: units };
-    var net = ap.alloc.map(function (u) { return u * step; });
-    var paid = net.reduce(function (s, x) { return s + x; }, 0);
-    var retainedCap = ap.left * step;
+    var capU = null;
+    if (mem.cap) { capU = new Float64Array(m); for (i = 0; i < m; i++) capU[i] = mem.cap[i] < 0 ? -1 : Math.floor(mem.cap[i] / step); }
+    var alloc = new Float64Array(m);
+    var left = m ? apportionT(units, mem.w, capU, mem.rank, alloc) : units;
+    var net = new Float64Array(m), paid = 0;
+    for (i = 0; i < m; i++) { net[i] = alloc[i] * step; paid += net[i]; }
+    var retainedCap = left * step;
     var retainedNet = retainedRound + retainedCap;
     var retainedTax = 0;
     if (paid === 0) retainedTax = bd.tax;
     else if (retainedNet > 0 && rate > 0) retainedTax = Math.min(bd.tax, Math.round(retainedNet * rate / (1 - rate)));
     var personTax = bd.tax - retainedTax;
-    var tax = personTax > 0 ? apportion(personTax, members.map(function (m, i) { return { id: m.id, weight: net[i], cap: null }; })).alloc : net.map(function () { return 0; });
-    var taxSum = tax.reduce(function (s, x) { return s + x; }, 0);
-    if (taxSum !== personTax) { retainedTax += personTax - taxSum; }
-    var gross = net.map(function (x, i) { return x + tax[i]; });
-    var capped = ms.map(function (m, i) { return m.cap != null && ap.alloc[i] >= m.cap; });
-    return {
-      gross: gross, tax: tax, net: net, capped: capped,
-      adjust: 0,
-      retainedGross: retainedNet + retainedTax,
-      retainedRoundNet: retainedRound, retainedCapNet: retainedCap
-    };
+    var tax = new Float64Array(m);
+    if (personTax > 0) apportionT(personTax, net, null, mem.rank, tax);
+    var taxSum = sumArr(tax);
+    if (taxSum !== personTax) retainedTax += personTax - taxSum;
+    var gross = new Float64Array(m), capped = new Uint8Array(m);
+    for (i = 0; i < m; i++) { gross[i] = net[i] + tax[i]; if (capU && capU[i] >= 0 && alloc[i] >= capU[i]) capped[i] = 1; }
+    return { gross: gross, tax: tax, net: net, capped: capped, adjust: 0, retainedGross: retainedNet + retainedTax, retainedRoundNet: retainedRound, retainedCapNet: retainedCap };
   }
 
-  function distributeGross(bd, members, step) {
-    var rate = bd.rate;
+  function distributeGrossT(bd, mem, step) {
+    var m = mem.w.length, rate = bd.rate, i;
     var effGross = Math.round(bd.declared / step) * step;
     var units = effGross / step;
-    var ms = members.map(function (m) {
-      var cap = null;
-      if (m.capPi != null) {
-        var capGross = rate > 0 ? Math.max(0, m.capPi - 1) / (1 - rate) : m.capPi;
-        cap = Math.floor(capGross / step);
+    var capU = null;
+    if (mem.cap) {
+      capU = new Float64Array(m);
+      for (i = 0; i < m; i++) {
+        var c = mem.cap[i];
+        if (c < 0) { capU[i] = -1; continue; }
+        var capGross = rate > 0 ? Math.max(0, c - 1) / (1 - rate) : c;
+        capU[i] = Math.floor(capGross / step);
       }
-      return { id: m.id, weight: m.weight, cap: cap };
-    });
-    var ap = members.length ? apportion(units, ms) : { alloc: [], left: units };
-    var gross = ap.alloc.map(function (u) { return u * step; });
-    var paidGross = gross.reduce(function (s, x) { return s + x; }, 0);
+    }
+    var alloc = new Float64Array(m);
+    var left = m ? apportionT(units, mem.w, capU, mem.rank, alloc) : units;
+    var gross = new Float64Array(m), paidGross = 0;
+    for (i = 0; i < m; i++) { gross[i] = alloc[i] * step; paidGross += gross[i]; }
     var taxTarget = Math.round(paidGross * rate);
-    var tax = taxTarget > 0 ? apportion(taxTarget, members.map(function (m, i) { return { id: m.id, weight: gross[i], cap: null }; })).alloc : gross.map(function () { return 0; });
-    var net = gross.map(function (g, i) { return g - tax[i]; });
-    var capped = ms.map(function (m, i) { return m.cap != null && ap.alloc[i] >= m.cap; });
-    var retained = ap.left * step;
-    return {
-      gross: gross, tax: tax, net: net, capped: capped,
-      adjust: effGross - bd.declared,
-      retainedGross: retained,
-      retainedRoundNet: 0, retainedCapNet: retained
-    };
+    var tax = new Float64Array(m);
+    if (taxTarget > 0) apportionT(taxTarget, gross, null, mem.rank, tax);
+    var net = new Float64Array(m), capped = new Uint8Array(m);
+    for (i = 0; i < m; i++) { net[i] = gross[i] - tax[i]; if (capU && capU[i] >= 0 && alloc[i] >= capU[i]) capped[i] = 1; }
+    var retained = left * step;
+    return { gross: gross, tax: tax, net: net, capped: capped, adjust: effGross - bd.declared, retainedGross: retained, retainedRoundNet: 0, retainedCapNet: retained };
   }
 
-  function sum(arr) { var s = 0; for (var i = 0; i < arr.length; i++) s += arr[i]; return s; }
+  function lazy(obj, key, enumerable, build) {
+    var cached;
+    Object.defineProperty(obj, key, {
+      configurable: true, enumerable: enumerable,
+      get: function () { if (cached === undefined) cached = build(); return cached; },
+      set: function (v) { cached = v; }
+    });
+  }
 
   function runPipeline(state) {
     state = state || {};
@@ -478,19 +665,36 @@ var Engine = (function () {
     if (errors.length) return { ok: false, errors: errors, warnings: [], options: o };
     try {
       var tiers = state.tiers || {}, pools = state.pools, periodDays = state.periodDays, people = state.people || [];
-      var warnings = collectRowWarnings(state, o);
-      var poolNames = Object.keys(pools);
+      var n = people.length, i;
+      var scan = scanRows(state, o), warnings = scan.warnings;
+      var poolNames = Object.keys(pools), P = poolNames.length, poolIndex = Object.create(null);
+      poolNames.forEach(function (nm, k) { poolIndex[nm] = k; });
       var bi = poolBudgets(pools), budgets = bi.budgets, N = bi.N;
       var step = o.roundingStep;
+      var pd = isNum(periodDays) && periodDays >= 1 ? periodDays : 1;
+      var equal = o.weighting === 'equal', ignoreDays = o.attendance === 'ignore';
 
-      var entries = new Array(people.length), participating = [], unresolvedIds = [], W = 0, zeroWeight = 0;
-      for (var i = 0; i < people.length; i++) {
-        var p = people[i];
-        var b = weightBreakdown(p, tiers, periodDays, o);
-        entries[i] = { person: p, b: b };
-        if (!b.excluded && b.unresolved) unresolvedIds.push(p.id);
-        if (b.weight > 0) { participating.push({ id: p.id, weight: b.weight, person: p }); W += b.weight; }
-        else if (!b.excluded && !b.unresolved) zeroWeight++;
+      var ids = new Array(n);
+      for (i = 0; i < n; i++) ids[i] = people[i].id;
+      var rank = rankOfIds(ids);
+      var weight = new Float64Array(n), excludedF = new Uint8Array(n), unresolvedF = new Uint8Array(n);
+      var partIdx = new Int32Array(n), m = 0, W = 0, zeroWeight = 0, unresolvedIds = [];
+      for (i = 0; i < n; i++) {
+        var p = people[i], base = null;
+        if (equal) base = 1;
+        else if (isNum(p.overrideValue)) base = p.overrideValue > 0 ? p.overrideValue : 0;
+        else { var tn = p.tier; if (tn != null && tn !== '' && hasOwn(tiers, tn) && isNum(tiers[tn])) base = tiers[tn] > 0 ? tiers[tn] : 0; }
+        var ex = !!p.excluded;
+        if (ex) excludedF[i] = 1;
+        if (base == null) { unresolvedF[i] = 1; if (!ex) unresolvedIds.push(p.id); continue; }
+        if (ex) continue;
+        var days = isNum(p.daysWorked) ? p.daysWorked : pd;
+        var att = ignoreDays ? 1 : clamp(days / pd, 0, 1);
+        var pen = clamp(isNum(p.penaltyRate) ? p.penaltyRate : 0, 0, 1);
+        var man = (isNum(p.manualFactor) && p.manualFactor >= 0) ? p.manualFactor : 1;
+        var wv = base * att * (1 - pen) * man;
+        if (wv > 0) { weight[i] = wv; partIdx[m++] = i; W += wv; }
+        else zeroWeight++;
       }
       if (zeroWeight) warnings.push({ code: 'ZERO_WEIGHT', message: zeroWeight + ' شخص داخل التوزيع بوزن صفر (أيام صفر أو جزاء كامل أو معامل صفر) — نصيبهم صفر' });
 
@@ -498,65 +702,72 @@ var Engine = (function () {
         return { ok: false, errors: [{ code: 'NO_ELIGIBLE_PEOPLE', message: 'لا يوجد أي شخص مؤهل للتوزيع (مجموع الأوزان صفر)', unresolvedCount: unresolvedIds.length }], warnings: warnings, options: o };
       }
 
+      partIdx = partIdx.subarray(0, m);
+      var pw = new Float64Array(m), prank = new Int32Array(m);
+      for (i = 0; i < m; i++) { pw[i] = weight[partIdx[i]]; prank[i] = rank[partIdx[i]]; }
       var capPi = o.capNet != null ? toPiastres(o.capNet) : null;
-      var wf = waterfill(participating, N, capPi);
-      var Wd = 0;
-      participating.forEach(function (e) { Wd += wf.dist[e.id]; });
+      var wf = waterfillT(pw, N, capPi);
+      var Wd = sumArr(wf.dist);
 
-      var targets = {};
-      poolNames.forEach(function (name) { targets[name] = (N > 0 && Wd > 0) ? Wd * budgets[name].net / N : 0; });
+      var targets = new Float64Array(P);
+      for (var tp = 0; tp < P; tp++) targets[tp] = (N > 0 && Wd > 0) ? Wd * budgets[poolNames[tp]].net / N : 0;
 
-      var poolMembers = {}, assignMeta = { converged: true, passes: 0 };
-      poolNames.forEach(function (n) { poolMembers[n] = []; });
+      var pin = new Int32Array(m);
+      for (i = 0; i < m; i++) { var pp = people[partIdx[i]].pinnedPool; pin[i] = (pp == null || pp === '') ? -1 : poolIndex[pp]; }
+
+      var members = new Array(P), assignMeta = { converged: true, passes: 0 }, assignPool = null;
+      function makeMem(size, withCap) { return { pos: new Int32Array(size), w: new Float64Array(size), cap: withCap ? new Float64Array(size) : null, rank: new Int32Array(size), n: 0 }; }
+      function addMem(mem, pos, wv2, cap) { var k2 = mem.n++; mem.pos[k2] = pos; mem.w[k2] = wv2; mem.rank[k2] = prank[pos]; if (mem.cap) mem.cap[k2] = cap == null ? -1 : cap; }
       if (o.allocation === 'assign') {
-        var items = participating.map(function (e) { return { id: e.id, weight: wf.dist[e.id], pinnedPool: normalizePinnedPool(e.person.pinnedPool) }; });
-        assignMeta = assignItemsToPools(items, targets, {});
-        items.forEach(function (it) {
-          var pn = assignMeta.assignment[it.id];
-          if (pn != null && poolMembers[pn]) poolMembers[pn].push({ id: it.id, weight: it.weight, capPi: capPi });
-        });
+        var ar = assignCore(wf.dist, pin, prank, targets);
+        assignMeta = ar; assignPool = ar.pool;
+        var cnt = new Int32Array(P);
+        for (i = 0; i < m; i++) if (ar.pool[i] >= 0) cnt[ar.pool[i]]++;
+        for (var mp = 0; mp < P; mp++) members[mp] = makeMem(cnt[mp], capPi != null);
+        for (i = 0; i < m; i++) if (ar.pool[i] >= 0) addMem(members[ar.pool[i]], i, wf.dist[i], capPi);
       } else {
-        var pinnedW = {}, free = [];
-        poolNames.forEach(function (n) { pinnedW[n] = 0; });
-        participating.forEach(function (e) {
-          var pin = normalizePinnedPool(e.person.pinnedPool);
-          if (pin != null) { pinnedW[pin] += wf.dist[e.id]; poolMembers[pin].push({ id: e.id, weight: wf.dist[e.id], capPi: capPi }); }
-          else free.push(e);
-        });
-        var R = {}, sumR = 0;
-        poolNames.forEach(function (n) { R[n] = Math.max(0, targets[n] - pinnedW[n]); sumR += R[n]; });
-        if (!(sumR > 0)) { sumR = 0; poolNames.forEach(function (n) { R[n] = targets[n]; sumR += R[n]; }); }
+        var pinnedW = new Float64Array(P), cntS = new Int32Array(P), freeCount = 0;
+        for (i = 0; i < m; i++) { if (pin[i] >= 0) { pinnedW[pin[i]] += wf.dist[i]; cntS[pin[i]]++; } else freeCount++; }
+        var R = new Float64Array(P), sumR = 0, q;
+        for (q = 0; q < P; q++) { R[q] = Math.max(0, targets[q] - pinnedW[q]); sumR += R[q]; }
+        if (!(sumR > 0)) { sumR = 0; for (q = 0; q < P; q++) { R[q] = targets[q]; sumR += R[q]; } }
+        for (q = 0; q < P; q++) members[q] = makeMem(cntS[q] + (sumR > 0 && R[q] > 0 ? freeCount : 0), capPi != null);
+        for (i = 0; i < m; i++) if (pin[i] >= 0) addMem(members[pin[i]], i, wf.dist[i], capPi);
         if (sumR > 0) {
-          free.forEach(function (e) {
-            var w = wf.dist[e.id];
-            poolNames.forEach(function (n) {
-              if (!(R[n] > 0)) return;
-              var share = R[n] / sumR;
-              poolMembers[n].push({ id: e.id, weight: w * share, capPi: capPi == null ? null : Math.floor(capPi * share) });
-            });
-          });
+          for (q = 0; q < P; q++) {
+            if (!(R[q] > 0)) continue;
+            var share = R[q] / sumR, capS = capPi == null ? null : Math.floor(capPi * share);
+            for (i = 0; i < m; i++) if (pin[i] < 0) addMem(members[q], i, wf.dist[i] * share, capS);
+          }
         }
       }
 
-      var poolResults = {}, personParts = Object.create(null), cappedIds = Object.create(null);
+      var split = o.allocation === 'split';
+      var G = new Float64Array(n), T = new Float64Array(n), NT = new Float64Array(n);
+      var poolCol = new Int32Array(n).fill(-1), partCount = new Uint8Array(n), cappedDist = new Uint8Array(n);
+      var mG = null, mT = null, mN = null, mC = null, mH = null;
+      if (split) { mG = new Float64Array(n * P); mT = new Float64Array(n * P); mN = new Float64Array(n * P); mC = new Uint8Array(n * P); mH = new Uint8Array(n * P); }
+      var poolResults = {}, cappedPeople = 0;
       var kGlobal = (N > 0 && Wd > 0) ? N / Wd : 0;
-      for (var pj = 0; pj < poolNames.length; pj++) {
-        var name = poolNames[pj], bd = budgets[name], members = poolMembers[name];
-        if (!members.length && bd.net > 0) {
+      for (var pj = 0; pj < P; pj++) {
+        var name = poolNames[pj], bd = budgets[name], mem = members[pj];
+        if (!mem.n && bd.net > 0) {
           return { ok: false, errors: [{ code: 'EMPTY_POOL_WITH_BUDGET', poolName: name, message: 'مجمع "' + name + '" لديه مبلغ ولكن لا يوجد أي مستحق فيه' }], warnings: warnings, options: o };
         }
-        var d = o.roundingTarget === 'gross' ? distributeGross(bd, members, step) : distributeNet(bd, members, step);
-        var actualWeight = 0;
-        members.forEach(function (m) { actualWeight += m.weight; });
-        var gP = sum(d.gross), tP = sum(d.tax), nP = sum(d.net);
+        var d = o.roundingTarget === 'gross' ? distributeGrossT(bd, mem, step) : distributeNetT(bd, mem, step);
+        var actualWeight = sumArr(mem.w);
+        var gP = sumArr(d.gross), tP = sumArr(d.tax), nP = sumArr(d.net);
         var kPool = actualWeight > 0 ? bd.net / actualWeight : null;
         var deviation = (kPool != null && kGlobal > 0) ? (kPool / kGlobal - 1) : null;
         var cappedCount = 0;
-        members.forEach(function (m, mi) {
-          (personParts[m.id] || (personParts[m.id] = [])).push({ pool: name, grossPiastres: d.gross[mi], taxPiastres: d.tax[mi], netPiastres: d.net[mi], capped: d.capped[mi] });
-          if (d.capped[mi]) { cappedIds[m.id] = true; cappedCount++; }
-        });
-        var roundingAdjusted = d.adjust !== 0 || d.retainedRoundNet > 0;
+        for (var mi = 0; mi < mem.n; mi++) {
+          var pi2 = partIdx[mem.pos[mi]];
+          G[pi2] += d.gross[mi]; T[pi2] += d.tax[mi]; NT[pi2] += d.net[mi];
+          partCount[pi2]++;
+          poolCol[pi2] = partCount[pi2] === 1 ? pj : -2;
+          if (d.capped[mi]) { if (!cappedDist[pi2]) cappedPeople++; cappedDist[pi2] = 1; cappedCount++; }
+          if (split) { var cell = pi2 * P + pj; mG[cell] = d.gross[mi]; mT[cell] = d.tax[mi]; mN[cell] = d.net[mi]; mC[cell] = d.capped[mi]; mH[cell] = 1; }
+        }
         poolResults[name] = {
           gross: pools[name].gross,
           taxRate: bd.rate,
@@ -571,82 +782,112 @@ var Engine = (function () {
           retainedPiastres: d.retainedGross,
           retainedRoundNetPiastres: d.retainedRoundNet,
           retainedCapNetPiastres: d.retainedCapNet,
-          roundingAdjusted: roundingAdjusted,
+          roundingAdjusted: d.adjust !== 0 || d.retainedRoundNet > 0,
           roundingDifferencePiastres: d.adjust,
-          targetWeight: o.allocation === 'assign' ? targets[name] : actualWeight,
+          targetWeight: o.allocation === 'assign' ? targets[pj] : actualWeight,
           actualWeight: actualWeight,
           deviation: deviation,
           kPool: kPool == null ? null : kPool / 100,
-          zeroBudgetWithMembers: bd.declared === 0 && members.length > 0,
-          memberCount: members.length,
+          zeroBudgetWithMembers: bd.declared === 0 && mem.n > 0,
+          memberCount: mem.n,
           cappedCount: cappedCount
         };
         if (d.adjust !== 0) warnings.push({ code: 'POOL_ROUNDED', poolName: name, message: 'عُدّل إجمالي مجمع "' + name + '" من ' + fromPiastres(bd.declared).toFixed(2) + ' إلى ' + fromPiastres(bd.declared + d.adjust).toFixed(2) + ' ليناسب وحدة التقريب' });
         if (d.retainedRoundNet > 0) warnings.push({ code: 'POOL_ROUNDED', poolName: name, message: 'بقي ' + fromPiastres(d.retainedRoundNet).toFixed(2) + ' ج.م صافٍ من مجمع "' + name + '" دون توزيع لأن كل نصيب من مضاعفات وحدة التقريب' });
-        if (bd.declared === 0 && members.length) warnings.push({ code: 'ZERO_BUDGET_POOL', poolName: name, message: 'مجمع "' + name + '" بلا مبلغ — أعضاؤه المثبّتون لن يحصلوا على شيء منه' });
+        if (bd.declared === 0 && mem.n) warnings.push({ code: 'ZERO_BUDGET_POOL', poolName: name, message: 'مجمع "' + name + '" بلا مبلغ — أعضاؤه المثبّتون لن يحصلوا على شيء منه' });
         if (d.retainedCapNet > 0) warnings.push({ code: 'CAP_RETAINED', poolName: name, message: 'بقي ' + fromPiastres(d.retainedCapNet).toFixed(2) + ' ج.م من مجمع "' + name + '" دون توزيع لأن كل أعضائه بلغوا الحد الأقصى' });
       }
       if (wf.count > 0) warnings.push({ code: 'CAP_APPLIED', message: wf.count + ' شخص بلغ الحد الأقصى للصافي، ووُزّع الفائض على الباقين' });
 
-      var out = new Array(entries.length), tot = { declared: 0, gross: 0, tax: 0, net: 0, retained: 0, adjust: 0 };
-      var assignment = {};
-      for (var ei = 0; ei < entries.length; ei++) {
-        var en = entries[ei], id = en.person.id, parts = personParts[id] || [];
-        var g = 0, t = 0, nn = 0;
-        parts.forEach(function (x) { g += x.grossPiastres; t += x.taxPiastres; nn += x.netPiastres; });
-        var single = parts.length === 1 ? parts[0].pool : null;
-        if (single) assignment[id] = single;
-        var dw = wf.dist[id] || 0;
-        out[ei] = {
-          id: id,
-          pool: single,
-          pools: parts.map(function (x) { return x.pool; }),
-          multi: parts.length > 1,
-          parts: parts,
-          weight: en.b.weight,
-          distWeight: dw,
-          capped: !!(wf.capped[id] || cappedIds[id]),
-          shareOfPoolWeight: single && poolResults[single].actualWeight > 0 ? dw / poolResults[single].actualWeight : 0,
-          grossPiastres: g,
-          taxPiastres: t,
-          netPiastres: nn,
-          idealNetEGP: dw > 0 ? wf.kPi * dw / 100 : 0,
-          unresolvedTier: !en.b.excluded && en.b.unresolved,
-          excluded: en.b.excluded,
-          breakdown: en.b
-        };
-        if (out[ei].netPiastres < 0 || out[ei].taxPiastres < 0) throw { code: 'NEGATIVE_AMOUNT', message: 'مبلغ سالب لصف ' + id };
-        if (capPi != null && o.roundingTarget === 'net' && nn > capPi) throw { code: 'CAP_VIOLATED', message: 'تجاوز الحد الأقصى لصف ' + id };
+      var dist = new Float64Array(n), cappedAny = new Uint8Array(n);
+      for (i = 0; i < m; i++) { dist[partIdx[i]] = wf.dist[i]; if (wf.capped[i]) cappedAny[partIdx[i]] = 1; }
+      var paidCount = 0, poolSum = new Float64Array(P * 3);
+      for (i = 0; i < n; i++) {
+        if (cappedDist[i]) cappedAny[i] = 1;
+        if (NT[i] < 0 || T[i] < 0) throw { code: 'NEGATIVE_AMOUNT', message: 'مبلغ سالب لصف ' + ids[i] };
+        if (capPi != null && o.roundingTarget === 'net' && NT[i] > capPi) throw { code: 'CAP_VIOLATED', message: 'تجاوز الحد الأقصى لصف ' + ids[i] };
+        if (NT[i] > 0) paidCount++;
+        if (!split && poolCol[i] >= 0) { var b3 = poolCol[i] * 3; poolSum[b3] += G[i]; poolSum[b3 + 1] += T[i]; poolSum[b3 + 2] += NT[i]; }
       }
-
-      poolNames.forEach(function (name) {
-        var pr = poolResults[name], gs = 0, ts = 0, ns = 0;
-        out.forEach(function (r) { r.parts.forEach(function (x) { if (x.pool === name) { gs += x.grossPiastres; ts += x.taxPiastres; ns += x.netPiastres; } }); });
+      if (split) {
+        for (i = 0; i < n * P; i++) if (mH[i]) { var b4 = (i % P) * 3; poolSum[b4] += mG[i]; poolSum[b4 + 1] += mT[i]; poolSum[b4 + 2] += mN[i]; }
+      }
+      var tot = { declared: 0, gross: 0, tax: 0, net: 0, retained: 0, adjust: 0 };
+      poolNames.forEach(function (nm, k) {
+        var pr = poolResults[nm], gs = poolSum[k * 3], ts = poolSum[k * 3 + 1], ns = poolSum[k * 3 + 2];
         var bad = gs !== pr.grossPiastres || ts !== pr.taxPiastres || ns !== pr.netPiastres || gs - ts !== ns ||
           pr.grossPiastres + pr.retainedPiastres !== pr.declaredPiastres + pr.adjustPiastres || pr.retainedPiastres < 0;
-        if (bad) throw { code: 'CONSERVATION_FAILED', message: 'فشل فحص حفظ القيمة في مجمع "' + name + '"' };
+        if (bad) throw { code: 'CONSERVATION_FAILED', message: 'فشل فحص حفظ القيمة في مجمع "' + nm + '"' };
         tot.declared += pr.declaredPiastres; tot.gross += gs; tot.tax += ts; tot.net += ns; tot.retained += pr.retainedPiastres; tot.adjust += pr.adjustPiastres;
       });
 
-      return {
+      var kPi = wf.kPi;
+      var cols = {
+        n: n, ids: ids, poolNames: poolNames, split: split,
+        gross: G, tax: T, net: NT, weight: weight, dist: dist, pool: poolCol,
+        capped: cappedAny, excluded: excludedF, unresolved: unresolvedF, warnFlags: scan.flags, kPi: kPi,
+        mG: mG, mT: mT, mN: mN, mC: mC, mH: mH, cappedDist: cappedDist
+      };
+      function partsAt(i2) {
+        var pc = poolCol[i2];
+        if (pc === -1) return [];
+        if (!split) return [{ pool: poolNames[pc], grossPiastres: G[i2], taxPiastres: T[i2], netPiastres: NT[i2], capped: !!cappedDist[i2] }];
+        var out = [];
+        for (var k3 = 0; k3 < P; k3++) {
+          var c3 = i2 * P + k3;
+          if (mH[c3]) out.push({ pool: poolNames[k3], grossPiastres: mG[c3], taxPiastres: mT[c3], netPiastres: mN[c3], capped: !!mC[c3] });
+        }
+        return out;
+      }
+      function poolsAt(i2) {
+        var pc = poolCol[i2];
+        if (pc === -1) return [];
+        if (pc >= 0) return [poolNames[pc]];
+        var out = [];
+        for (var k4 = 0; k4 < P; k4++) if (mH[i2 * P + k4]) out.push(poolNames[k4]);
+        return out;
+      }
+      cols.partsAt = partsAt;
+      cols.poolsAt = poolsAt;
+      function personAt(i2) {
+        var parts = partsAt(i2), single = parts.length === 1 ? parts[0].pool : null, dw = dist[i2];
+        var b = weightBreakdown(people[i2], tiers, periodDays, o);
+        return {
+          id: ids[i2], pool: single, pools: parts.map(function (x) { return x.pool; }), multi: parts.length > 1, parts: parts,
+          weight: weight[i2], distWeight: dw, capped: !!cappedAny[i2],
+          shareOfPoolWeight: single && poolResults[single].actualWeight > 0 ? dw / poolResults[single].actualWeight : 0,
+          grossPiastres: G[i2], taxPiastres: T[i2], netPiastres: NT[i2],
+          idealNetEGP: dw > 0 ? kPi * dw / 100 : 0,
+          unresolvedTier: !excludedF[i2] && !!unresolvedF[i2], excluded: !!excludedF[i2], breakdown: b
+        };
+      }
+      cols.personAt = personAt;
+
+      var res = {
         ok: true,
         engineVersion: ENGINE_VERSION,
         options: o,
         k: W > 0 ? (N / W) / 100 : 0,
-        kEffective: wf.kPi / 100,
+        kEffective: kPi / 100,
         W: W,
         Wd: Wd,
         N: fromPiastres(N),
         NPiastres: N,
         poolResults: poolResults,
-        people: out,
-        assignment: assignment,
         warnings: warnings,
+        warningCounts: scan.counts,
         unresolvedTierIds: unresolvedIds,
-        cappedCount: Object.keys(cappedIds).length || wf.count,
+        cappedCount: cappedPeople || wf.count,
+        paidCount: paidCount,
+        insideCount: m,
         totals: tot,
-        meta: { timingMs: now() - t0, converged: assignMeta.converged, passes: assignMeta.passes }
+        meta: { timingMs: 0, converged: assignMeta.converged, passes: assignMeta.passes, rows: n }
       };
+      Object.defineProperty(res, 'cols', { value: cols, enumerable: false, configurable: true });
+      lazy(res, 'people', true, function () { var arr = new Array(n); for (var z = 0; z < n; z++) arr[z] = personAt(z); return arr; });
+      lazy(res, 'assignment', false, function () { var a = {}; for (var z = 0; z < n; z++) if (poolCol[z] >= 0) a[ids[z]] = poolNames[poolCol[z]]; return a; });
+      res.meta.timingMs = now() - t0;
+      return res;
     } catch (e) {
       return { ok: false, errors: [{ code: (e && e.code) || 'INTERNAL_ERROR', message: (e && e.message) || 'خطأ داخلي غير متوقع في محرك الحساب', detail: String(e && e.stack || '') }], warnings: [], options: o };
     }
@@ -656,8 +897,10 @@ var Engine = (function () {
     VERSION: ENGINE_VERSION,
     ROUNDING_STEPS: ROUNDING_STEPS,
     DEFAULT_OPTIONS: DEFAULT_OPTIONS,
+    FLAG_BITS: FLAG_BITS,
     normalizeArabic: normalizeArabic,
     normalizeLoose: normalizeLoose,
+    nameKey: nameKey,
     normMap: normMap,
     normalizeForTierMatch: normalizeForTierMatch,
     canonicalizeTierName: canonicalizeTierName,

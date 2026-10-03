@@ -61,14 +61,17 @@ var Q = (function () {
     var hr = Math.min(st.headerRow || 0, Math.max(0, grid.length - 1));
     st.headerRow = hr;
     var head = grid[hr] || [];
-    var width = grid.reduce(function (m, r) { return Math.max(m, (r || []).length); }, head.length);
+    var width = head.length;
+    for (var g = 0; g < grid.length; g++) { var gl = grid[g] ? grid[g].length : 0; if (gl > width) width = gl; }
     var headers = [];
     for (var i = 0; i < width; i++) {
       var h = head[i];
       headers.push(String(h == null || String(h).trim() === '' ? 'عمود ' + (i + 1) : h).replace(/\s+/g, ' ').trim());
     }
     st.headers = headers;
-    st.rawRows = grid.slice(hr + 1).filter(Importer.nonEmpty);
+    var body = [];
+    for (var b = hr + 1; b < grid.length; b++) if (Importer.nonEmpty(grid[b])) body.push(grid[b]);
+    st.rawRows = body;
   }
   Q.deriveGrid = deriveGrid;
 
@@ -151,8 +154,16 @@ var Q = (function () {
   }
   function recomputeDebounced(after, delay) {
     if (recomputeTimer) clearTimeout(recomputeTimer);
-    recomputeTimer = setTimeout(function () { recomputeTimer = null; recompute(); if (after) after(); }, delay == null ? 140 : delay);
+    var n = S().people.length;
+    var d = delay == null ? (n > 200000 ? 650 : (n > 30000 ? 320 : 140)) : delay;
+    recomputeTimer = setTimeout(function () { recomputeTimer = null; recompute(); if (after) after(); }, d);
   }
+  function recomputeBusy(text, after) {
+    var n = S().people.length;
+    if (n < 30000) { recompute(); if (after) after(); return; }
+    Busy.run(text || ('جارٍ حساب ' + Fmt.int(n) + ' صف…'), function () { recompute(); if (after) after(); });
+  }
+  Q.recomputeBusy = recomputeBusy;
   function recomputeNow(after) {
     if (recomputeTimer) { clearTimeout(recomputeTimer); recomputeTimer = null; }
     recompute();
@@ -165,14 +176,37 @@ var Q = (function () {
   Q.ok = ok;
 
   function resultIndex() {
-    var st = S();
-    if (st.__resultIndex && st.__resultIndexFor === st.result) return st.__resultIndex;
-    var m = Object.create(null);
-    if (st.result && st.result.ok) st.result.people.forEach(function (r) { m[r.id] = r; });
+    var st = S(), res = st.result;
+    if (st.__resultIndex && st.__resultIndexFor === res) return st.__resultIndex;
+    var m;
+    if (res && res.ok && res.cols) {
+      var c = res.cols, pos = idPos(), memo = Object.create(null);
+      m = new Proxy(memo, { get: function (t, k) {
+        if (typeof k !== 'string') return undefined;
+        if (k in t) return t[k];
+        var i = pos.get(k);
+        if (i === undefined) i = pos.get(Number(k));
+        if (i === undefined || i >= c.n || c.ids[i] !== st.people[i].id) return undefined;
+        return (t[k] = c.personAt(i));
+      } });
+    } else {
+      m = Object.create(null);
+      if (res && res.ok) res.people.forEach(function (r) { m[r.id] = r; });
+    }
     st.__resultIndex = m;
-    st.__resultIndexFor = st.result;
+    st.__resultIndexFor = res;
     return m;
   }
+  function idPos() {
+    var st = S();
+    if (st.__idPos && st.__idPosFor === st.people) return st.__idPos;
+    var m = new Map(), ppl = st.people;
+    for (var i = 0; i < ppl.length; i++) m.set(ppl[i].id, i);
+    st.__idPos = m;
+    st.__idPosFor = ppl;
+    return m;
+  }
+  Q.idPos = idPos;
   function rowsCache() {
     var st = S();
     if (st.__rows && st.__rowsFor === st.result && st.__rowsPeople === st.people) return st.__rows;
@@ -182,23 +216,31 @@ var Q = (function () {
     st.__rowById = null;
     return st.__rows;
   }
+  function byIdView(list) {
+    var pos = idPos();
+    return new Proxy(Object.create(null), {
+      get: function (t, k) {
+        if (typeof k !== 'string') return undefined;
+        var i = pos.get(k);
+        if (i === undefined && k !== '' && !isNaN(k)) i = pos.get(Number(k));
+        return i === undefined ? undefined : list[i];
+      },
+      has: function (t, k) { return pos.has(k) || (!isNaN(k) && pos.has(Number(k))); }
+    });
+  }
   function rowById() {
     var st = S(), rows = rowsCache();
     if (st.__rowById && st.__rowByIdFor === rows) return st.__rowById;
-    var m = Object.create(null);
-    rows.forEach(function (r) { m[r.id] = r; });
-    st.__rowById = m;
+    st.__rowById = byIdView(rows);
     st.__rowByIdFor = rows;
-    return m;
+    return st.__rowById;
   }
   function personById() {
     var st = S();
     if (st.__personById && st.__personByIdFor === st.people) return st.__personById;
-    var m = Object.create(null);
-    st.people.forEach(function (p) { m[p.id] = p; });
-    st.__personById = m;
+    st.__personById = byIdView(st.people);
     st.__personByIdFor = st.people;
-    return m;
+    return st.__personById;
   }
   function searchIndex() {
     var st = S(), rows = rowsCache();
@@ -211,6 +253,12 @@ var Q = (function () {
     var st = S();
     if (st.__problemIds && st.__problemIdsFor === st.result) return st.__problemIds;
     var ids = Object.create(null);
+    var c = st.result && st.result.ok && st.result.cols;
+    if (c && c.warnFlags) {
+      var size = 0;
+      for (var i = 0; i < c.n; i++) if (c.warnFlags[i]) { ids[c.ids[i]] = true; size++; }
+      Object.defineProperty(ids, '__size', { value: size });
+    } else
     ((st.result && st.result.warnings) || []).forEach(function (w) { if (w.personId != null) ids[w.personId] = true; });
     ((st.result && st.result.errors) || []).forEach(function (w) { if (w.personId != null) ids[w.personId] = true; });
     st.__problemIds = ids;
@@ -293,22 +341,35 @@ var Q = (function () {
   }
   Q.activeFilterLines = activeFilterLines;
 
+  var lastSearch = { rows: null, q: null, res: null };
+  function searchFor(rows, q) {
+    if (lastSearch.rows === rows && lastSearch.q === q) return lastSearch.res;
+    var res = Search.run(searchIndex(), q);
+    lastSearch = { rows: rows, q: q, res: res };
+    return res;
+  }
   function viewRows(opts) {
     var st = S(), rows = rowsCache(), f = st.filters || emptyFilters();
     var noSort = !!(opts && opts.noSort);
+    var sortKey = noSort ? '' : (st.sort && st.sort.key && st.sort.dir ? st.sort.key + ':' + st.sort.dir : '');
+    var sig = JSON.stringify([f.q, f.dept, f.tier, f.pool, f.flags, sortKey, st.baseline ? st.baseline.at : 0]);
+    if (st.__view && st.__viewRows === rows && st.__viewSig === sig && st.__viewResult === st.result) { st.__lastNeedle = st.__viewNeedle; return st.__view; }
     var res = null;
-    if (f.q) { res = Search.run(searchIndex(), f.q); st.__lastNeedle = res ? res.needle : ''; }
+    if (f.q) { res = searchFor(rows, f.q); st.__lastNeedle = res ? res.needle : ''; }
     else st.__lastNeedle = '';
     var defs = (f.flags || []).map(flagDef).filter(Boolean);
-    var out = rows.filter(function (r) {
-      if (res && !res.ids[r.id]) return false;
-      if (f.dept && r.dept !== f.dept) return false;
-      if (f.tier && r.tier !== f.tier) return false;
-      if (f.pool && r.pools.indexOf(f.pool) === -1 && r.pinned !== f.pool) return false;
-      for (var i = 0; i < defs.length; i++) if (!defs[i].test(r)) return false;
-      return true;
-    });
-    if (!noSort && st.sort && st.sort.key && st.sort.dir) {
+    var n = rows.length, out = [], hitRows = res && res.rows;
+    for (var i = 0; i < n; i++) {
+      var r = rows[i];
+      if (hitRows && !hitRows[i]) continue;
+      if (f.dept && r.dept !== f.dept) continue;
+      if (f.tier && r.tier !== f.tier) continue;
+      if (f.pool && r.pinned !== f.pool && r.pools.indexOf(f.pool) === -1) continue;
+      var ok2 = true;
+      for (var k = 0; k < defs.length; k++) if (!defs[k].test(r)) { ok2 = false; break; }
+      if (ok2) out.push(r);
+    }
+    if (sortKey) {
       var col = colDef(st.sort.key);
       if (col) out = Sorter.sortRows(out, col.key, st.sort.dir, function (r) { return col.get(r); });
       else if (st.sort.key === 'delta') {
@@ -316,16 +377,42 @@ var Q = (function () {
         if (d) out = Sorter.sortRows(out, 'delta', st.sort.dir, function (r) { return d.byId[r.id]; });
       }
     } else if (res) {
-      out.sort(function (a, b) { return res.order[a.id] - res.order[b.id]; });
+      var pos = idPos(), rank = res.rank;
+      out.sort(function (a, b) { return rank[pos.get(a.id)] - rank[pos.get(b.id)]; });
     }
+    st.__view = out; st.__viewRows = rows; st.__viewSig = sig; st.__viewResult = st.result; st.__viewNeedle = st.__lastNeedle;
     return out;
   }
+  function flagCounts() {
+    var st = S(), rows = rowsCache();
+    var sig = st.baseline ? st.baseline.at : 0;
+    if (st.__flagCounts && st.__flagCountsFor === rows && st.__flagCountsSig === sig) return st.__flagCounts;
+    var counts = {};
+    FLAGS.forEach(function (fl) { counts[fl.key] = 0; });
+    for (var i = 0; i < rows.length; i++) for (var j = 0; j < FLAGS.length; j++) if (FLAGS[j].test(rows[i])) counts[FLAGS[j].key]++;
+    st.__flagCounts = counts; st.__flagCountsFor = rows; st.__flagCountsSig = sig;
+    return counts;
+  }
+  Q.flagCounts = flagCounts;
+  function groupCounts(key) {
+    var st = S(), rows = rowsCache();
+    st.__groupCounts = st.__groupCounts && st.__groupCountsFor === rows ? st.__groupCounts : {};
+    st.__groupCountsFor = rows;
+    if (st.__groupCounts[key]) return st.__groupCounts[key];
+    var counts = Object.create(null);
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (key === 'pool') { var ps = r.pools; if (!ps.length && r.pinned) ps = [r.pinned]; for (var k = 0; k < ps.length; k++) counts[ps[k]] = (counts[ps[k]] || 0) + 1; }
+      else if (r[key]) counts[r[key]] = (counts[r[key]] || 0) + 1;
+    }
+    st.__groupCounts[key] = counts;
+    return counts;
+  }
+  Q.groupCounts = groupCounts;
   Q.viewRows = viewRows;
 
   function uniqueValues(key) {
-    var seen = Object.create(null), out = [];
-    rowsCache().forEach(function (r) { var v = r[key]; if (!v || seen[v]) return; seen[v] = true; out.push(v); });
-    return out.sort(Sorter.compareValues);
+    return Object.keys(groupCounts(key)).sort(Sorter.compareValues);
   }
   Q.uniqueValues = uniqueValues;
 
@@ -344,7 +431,8 @@ var Q = (function () {
     var st = S();
     if (!st.undoStack) st.undoStack = [];
     st.undoStack.push({ label: label, snap: snap || snapshot(), at: Date.now() });
-    while (st.undoStack.length > 80) st.undoStack.shift();
+    var size = st.people.length, cap = size > 500000 ? 6 : (size > 100000 ? 15 : (size > 20000 ? 40 : 80));
+    while (st.undoStack.length > cap) st.undoStack.shift();
     st.redoStack = [];
     paintUndoButtons();
   }
@@ -416,25 +504,49 @@ var Q = (function () {
   Q.snapshot = snapshot;
   Q.paintUndoButtons = paintUndoButtons;
 
+  function applyPatch(p, patch) {
+    var changed = false;
+    for (var k in patch) if (p[k] !== patch[k]) { changed = true; break; }
+    return changed ? Object.assign({}, p, patch) : null;
+  }
   function updatePeople(ids, patchFn) {
-    var st = S(), set = null;
-    if (ids !== null) { set = Object.create(null); ids.forEach(function (id) { set[id] = true; }); }
-    var touched = 0;
-    st.people = st.people.map(function (p) {
-      if (set && !set[p.id]) return p;
-      var patch = patchFn(p);
-      if (!patch) return p;
-      var changed = Object.keys(patch).some(function (k) { return p[k] !== patch[k]; });
-      if (!changed) return p;
-      touched++;
-      return Object.assign({}, p, patch);
-    });
+    var st = S(), touched = 0, next = null, ppl = st.people, i;
+    if (ids !== null && ids.length * 8 < ppl.length) {
+      var pos = idPos();
+      for (var j = 0; j < ids.length; j++) {
+        i = pos.get(ids[j]);
+        if (i === undefined) continue;
+        var patch = patchFn(ppl[i]);
+        if (!patch) continue;
+        var np = applyPatch(ppl[i], patch);
+        if (!np) continue;
+        if (!next) next = ppl.slice();
+        next[i] = np; touched++;
+      }
+    } else {
+      var set = null;
+      if (ids !== null) set = new Set(ids);
+      for (i = 0; i < ppl.length; i++) {
+        var p = ppl[i];
+        if (set && !set.has(p.id)) continue;
+        var pt = patchFn(p);
+        if (!pt) continue;
+        var q = applyPatch(p, pt);
+        if (!q) continue;
+        if (!next) next = ppl.slice();
+        next[i] = q; touched++;
+      }
+    }
+    if (next) {
+      st.people = next;
+      if (st.__idPos && st.__idPosFor === ppl) st.__idPosFor = next;
+    }
     return touched;
   }
   Q.updatePeople = updatePeople;
   function nextPersonId() {
-    var max = 0;
-    S().people.forEach(function (p) { if (typeof p.id === 'number' && p.id > max) max = p.id; });
+    var max = 0, ppl = S().people;
+    for (var i = 0; i < ppl.length; i++) { var id = ppl[i].id; if (typeof id === 'number' && id > max) max = id; }
     return max + 1;
   }
   Q.nextPersonId = nextPersonId;
@@ -900,6 +1012,10 @@ var Q = (function () {
     side.appendChild(option('copy', 'لصق من Excel', 'انسخ الجدول من أي جدول بيانات والصقه هنا', openPasteModal));
     side.appendChild(option('download', 'تنزيل قالب فارغ', 'أعمدة صحيحة ودليل شرح لكل عمود', function () { Q.downloadTemplate('blank'); }));
     side.appendChild(option('folder', 'استعادة نسخة محفوظة', 'ملف .json نزّلته سابقًا من قِسمة', function () { Q.importBundle(); }));
+    var stress = el('button', 'link-btn stress-link', 'اختبار الحمل: حتى مليوني صف');
+    stress.type = 'button';
+    stress.addEventListener('click', openStressPicker);
+    side.appendChild(stress);
     grid.appendChild(side);
     wrap.appendChild(grid);
 
@@ -994,6 +1110,44 @@ var Q = (function () {
   Q.guardReplace = guardReplace;
 
   function loadDemo() { guardReplace(loadDemoConfirmed, 'البيانات التجريبية'); }
+  function loadStress(count) {
+    guardReplace(function () {
+      Busy.run('جارٍ توليد ' + Fmt.int(count) + ' صف وحسابها…', function () {
+        var st = S();
+        st.people = DemoData.people(count, 20260807);
+        st.penaltyScale = 'fraction';
+        st.undoStack = []; st.redoStack = []; st.selection = {}; st.baseline = null;
+        st.sourceGrid = []; st.headerRow = 0; st.headers = []; st.rawRows = []; st.mapping = {};
+        st.mappedFromGrid = false;
+        st.fileName = 'اختبار حمل (' + Fmt.int(count) + ' صف)';
+        st.sheetName = ''; st.workbook = null;
+        st.filters = emptyFilters(); st.sort = { key: null, dir: null };
+        st.__restore = null;
+        var t0 = performance.now();
+        recompute();
+        return performance.now() - t0;
+      }).then(function (ms) {
+        goto('allocate');
+        UI.toast('حُسب ' + Fmt.int(count) + ' صف في ' + (ms / 1000).toFixed(2) + ' ث', 'ok');
+      });
+    }, 'بيانات اختبار الحمل');
+  }
+  Q.loadStress = loadStress;
+  function openStressPicker() {
+    var m = UI.modal({ title: 'اختبار الحمل', subtitle: 'بيانات مولّدة لقياس السرعة على جهازك', size: 'sm' });
+    var list = el('div', 'stress-list');
+    [[10000, 'خفيف'], [100000, 'كبير'], [250000, 'ضخم'], [1000000, 'مليون صف'], [2000000, 'مليونا صف']].forEach(function (x) {
+      var b = el('button', 'stress-opt');
+      b.type = 'button';
+      b.appendChild(el('b', 'num', Fmt.int(x[0])));
+      b.appendChild(el('span', null, x[1]));
+      b.addEventListener('click', function () { m.close(); setTimeout(function () { loadStress(x[0]); }, 180); });
+      list.appendChild(b);
+    });
+    m.body.appendChild(list);
+    m.body.appendChild(el('p', 'small muted mt3', 'فوق 15 ألف صف يُحفظ العمل في IndexedDB بصيغة عمودية مضغوطة.'));
+  }
+  Q.openStressPicker = openStressPicker;
   function loadDemoConfirmed() {
     var st = S();
     var people = DemoData.people(240, 20260807);
@@ -1020,7 +1174,9 @@ var Q = (function () {
 
   function handleFile(file) {
     if (/\.json$/i.test(file.name) || file.type === 'application/json') { Q.readBundleFile(file); return; }
-    if (file.size > 60 * 1024 * 1024) { UI.toast('الملف أكبر من 60 م.ب — قسّمه أو احفظه كـ CSV', 'danger'); return; }
+    var textual = /\.(csv|tsv|txt)$/i.test(file.name);
+    var limit = textual ? 400 : 150;
+    if (file.size > limit * 1024 * 1024) { UI.toast('الملف أكبر من ' + limit + ' م.ب' + (textual ? '' : ' — احفظه كـ CSV ليُقرأ أسرع وبحجم أكبر'), 'danger'); return; }
     guardReplace(function () { readFile(file); }, 'الملف الجديد');
   }
   Q.handleFile = handleFile;
@@ -1032,29 +1188,44 @@ var Q = (function () {
       return;
     }
     var reader = new FileReader();
-    var t = UI.toast('جارٍ قراءة «' + file.name + '»…', null, 20000);
-    reader.onerror = function () { if (t) t.dismiss(); UI.toast('تعذّر قراءة الملف', 'danger'); };
+    Busy.show('جارٍ قراءة «' + file.name + '» (' + Fmt.kb(file.size) + ')…');
+    reader.onerror = function () { Busy.hide(); UI.toast('تعذّر قراءة الملف', 'danger'); };
     reader.onload = function (e) {
-      if (t) t.dismiss();
-      var sheets;
-      try {
-        if (isText) sheets = [{ name: '', grid: Importer.readCsv(Importer.decodeText(e.target.result)) }];
-        else {
-          var wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
-          sheets = wb.SheetNames.map(function (n) {
-            return { name: n, grid: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, blankrows: false, defval: '', raw: true }) };
-          }).filter(function (s) { return s.grid.length > 0; });
+      setTimeout(function () {
+        var sheets;
+        try {
+          if (isText) sheets = [{ name: '', grid: Importer.readCsv(Importer.decodeText(e.target.result)) }];
+          else {
+            var wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true, dense: true, cellHTML: false, cellFormula: false, cellStyles: false });
+            sheets = wb.SheetNames.map(function (n) {
+              return { name: n, grid: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, blankrows: false, defval: '', raw: true }) };
+            }).filter(function (s) { return s.grid.length > 0; });
+          }
+        } catch (err) {
+          Busy.hide();
+          UI.toast('الملف غير مقروء — تأكد أنه Excel أو CSV صحيح وغير محمي بكلمة مرور', 'danger');
+          return;
         }
-      } catch (err) {
-        UI.toast('الملف غير مقروء — تأكد أنه Excel أو CSV صحيح وغير محمي بكلمة مرور', 'danger');
-        return;
-      }
-      sheets = (sheets || []).map(function (s) { return { name: s.name, grid: s.grid.map(function (r) { return (r || []).map(cleanCell); }) }; });
-      var best = sheets.slice().sort(function (a, b) { return b.grid.length - a.grid.length; })[0];
-      if (!best || best.grid.length < 2) { UI.toast('الملف يحتاج صف عناوين وصف بيانات واحد على الأقل', 'warn'); return; }
-      loadGrid(best.grid, file.name, best.name, sheets.length > 1 ? sheets : null);
+        (sheets || []).forEach(function (s) { cleanGrid(s.grid); });
+        Busy.hide();
+        var best = sheets.slice().sort(function (a, b) { return b.grid.length - a.grid.length; })[0];
+        if (!best || best.grid.length < 2) { UI.toast('الملف يحتاج صف عناوين وصف بيانات واحد على الأقل', 'warn'); return; }
+        loadGrid(best.grid, file.name, best.name, sheets.length > 1 ? sheets : null);
+      }, 30);
     };
     reader.readAsArrayBuffer(file);
+  }
+  function cleanGrid(grid) {
+    for (var r = 0; r < grid.length; r++) {
+      var row = grid[r];
+      if (!row) { grid[r] = []; continue; }
+      for (var c = 0; c < row.length; c++) {
+        var v = row[c];
+        if (typeof v === 'string') { if (v.length && (v.charCodeAt(0) <= 32 || v.charCodeAt(v.length - 1) <= 32 || v.indexOf('\u00a0') !== -1)) row[c] = v.replace(/\u00a0/g, ' ').trim(); }
+        else if (v instanceof Date) row[c] = Fmt.isoDate(v.getTime());
+      }
+    }
+    return grid;
   }
   function cleanCell(v) {
     if (v instanceof Date) return Fmt.isoDate(v.getTime());
@@ -1117,12 +1288,14 @@ var Q = (function () {
     var tierNames = Object.keys(st.tiers), poolNames = Object.keys(st.pools);
     var scale = Importer.detectPenaltyScale(st.rawRows, st.mapping.penaltyRate, st.penaltyScale);
     var unknownPools = Object.create(null);
-    st.people = st.rawRows.map(function (row, i) {
-      var p = Importer.rowToPerson(row, st.mapping, i + 1, tierNames, poolNames, scale, st.tierAliases);
+    var raw = st.rawRows, out = new Array(raw.length);
+    for (var i = 0; i < raw.length; i++) {
+      var p = Importer.rowToPerson(raw[i], st.mapping, i + 1, tierNames, poolNames, scale, st.tierAliases);
       if (p.unknownPool) unknownPools[p.unknownPool] = (unknownPools[p.unknownPool] || 0) + 1;
       delete p.unknownPool;
-      return p;
-    });
+      out[i] = p;
+    }
+    st.people = out;
     st.undoStack = []; st.redoStack = []; st.selection = {}; st.baseline = null;
     st.filters = emptyFilters();
     st.mappedFromGrid = true;
@@ -1281,15 +1454,19 @@ var Q = (function () {
           confirmLabel: 'إعادة القراءة', danger: true,
           altLabel: 'متابعة بدون إعادة قراءة',
           onAlt: function () { goto('amounts'); },
-          onConfirm: function () { applyMapping(); goto('amounts'); }
+          onConfirm: function () { mapBusy(function () { goto('amounts'); }); }
         });
         return false;
       }
+      if (st.rawRows.length > 30000) { mapBusy(function () { goto('amounts'); }); return false; }
       applyMapping();
     }));
     return wrap;
   }
   Q.screens.map = screenMap;
+  function mapBusy(after) {
+    Busy.run('جارٍ قراءة ' + Fmt.int(S().rawRows.length) + ' صف…', applyMapping).then(after, function (e) { UI.toast('تعذّر تطبيق الربط: ' + (e && e.message || e), 'danger'); });
+  }
 
   function tierMatchCard() {
     var st = S();
@@ -1306,7 +1483,12 @@ var Q = (function () {
       return c;
     }
     var names = Object.keys(st.tiers);
-    var values = Importer.distinctTiers(st.sourceGrid, st.headerRow, st.mapping.tier);
+    var dkey = st.headerRow + ':' + st.mapping.tier;
+    if (!(st.__distinct && st.__distinctFor === st.sourceGrid && st.__distinctKey === dkey)) {
+      st.__distinct = Importer.distinctTiers(st.sourceGrid, st.headerRow, st.mapping.tier);
+      st.__distinctFor = st.sourceGrid; st.__distinctKey = dkey;
+    }
+    var values = st.__distinct;
     var unknown = 0;
     var list = el('div', 'tier-match');
     values.slice(0, 60).forEach(function (v) {
@@ -1353,11 +1535,19 @@ var Q = (function () {
     var st = S();
     var c = card('ملخص الاستيراد', null, null, 'mount mount-2');
     var body = el('div', 'card-pad stack g2');
-    var nameCol = st.mapping.name, blank = 0, dup = 0, seen = Object.create(null);
-    if (nameCol != null) st.rawRows.forEach(function (r) {
-      var n = Engine.normalizeLoose(r[nameCol]);
-      if (!n) blank++; else if (seen[n]) dup++; else seen[n] = 1;
-    });
+    var nameCol = st.mapping.name, blank = 0, dup = 0;
+    if (nameCol != null) {
+      var key = nameCol + ':' + st.rawRows.length;
+      if (st.__nameStats && st.__nameStatsFor === st.rawRows && st.__nameStatsKey === key) { blank = st.__nameStats.blank; dup = st.__nameStats.dup; }
+      else {
+        var seen = new Set(), rows = st.rawRows;
+        for (var i = 0; i < rows.length; i++) {
+          var n = Engine.normalizeLoose(rows[i][nameCol]);
+          if (!n) blank++; else if (seen.has(n)) dup++; else seen.add(n);
+        }
+        st.__nameStats = { blank: blank, dup: dup }; st.__nameStatsFor = st.rawRows; st.__nameStatsKey = key;
+      }
+    }
     function line(label, value, tone) {
       var r = el('div', 'sum-line');
       r.appendChild(el('span', null, label));
@@ -1460,7 +1650,7 @@ var Q = (function () {
       var nameIn = UI.input({ value: name, ariaLabel: 'اسم المجمع', cls: 'pool-name', maxLength: 60, onChange: function (v) { renamePool(name, v); } });
       nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') nameIn.blur(); if (e.key === 'Escape') { nameIn.value = name; nameIn.blur(); } });
       top.appendChild(nameIn);
-      var pinned = st.people.filter(function (x) { return x.pinnedPool === name; }).length;
+      var pinned = pinCounts()[name] || 0;
       if (pinned) top.appendChild(UI.attachTip(UI.badge(Fmt.int(pinned) + ' مثبّت', 'info', 'pin'), 'أشخاص مثبّتون يدويًا على هذا المجمع'));
       var del = UI.iconBtn('trash', names.length <= 1 ? 'لا يمكن حذف آخر مجمع' : 'حذف المجمع', function () { removePool(name); }, 'sm');
       if (names.length <= 1) del.disabled = true;
@@ -1519,8 +1709,7 @@ var Q = (function () {
     var row = el('div', 'kpi-row');
     row.appendChild(kpiCard('الإجمالي المُدخل', UI.moneyCell(t.grossPi, { size: 'lg', currency: true }), Fmt.int(t.names.length) + ' مجمع', 'flat', 'coins'));
     row.appendChild(kpiCard('الصافي للتوزيع', UI.moneyCell(t.netPi, { size: 'lg', currency: true }), 'بعد خصم ' + Fmt.piastres(t.grossPi - t.netPi) + ' ج.م', 'info', 'layers'));
-    var paid = 0;
-    if (r && r.ok) r.people.forEach(function (p) { if (p.netPiastres > 0) paid++; });
+    var paid = r && r.ok ? r.paidCount : 0;
     row.appendChild(kpiCard('المستحقون', UI.numText(r && r.ok ? Fmt.int(paid) : Fmt.int(st.people.length), 'lg'), 'من ' + Fmt.int(st.people.length) + ' شخص في الملف', 'flat', 'people'));
     var avg = r && r.ok && paid ? r.totals.net / paid : 0;
     row.appendChild(kpiCard('متوسط الصافي', r && r.ok ? UI.moneyCell(Math.round(avg), { size: 'lg', currency: true }) : UI.dash(), r && r.ok ? 'نصيب وحدة الوزن ' + Fmt.egp(r.kEffective, 4) : 'يظهر بعد الحساب', 'flat', 'person'));
@@ -1563,7 +1752,7 @@ var Q = (function () {
   }
   function removePool(name) {
     var st = S();
-    var pinned = st.people.filter(function (p) { return p.pinnedPool === name; }).length;
+    var pinned = pinCounts()[name] || 0;
     function doIt() {
       pushUndo('حذف مجمع ' + name);
       delete st.pools[name];
@@ -1590,10 +1779,27 @@ var Q = (function () {
     return c;
   }
 
+  function pinCounts() {
+    var st = S();
+    if (st.__pinCounts && st.__pinCountsFor === st.people) return st.__pinCounts;
+    var c = Object.create(null), ppl = st.people;
+    for (var i = 0; i < ppl.length; i++) { var p = ppl[i].pinnedPool; if (p) c[p] = (c[p] || 0) + 1; }
+    st.__pinCounts = c; st.__pinCountsFor = ppl;
+    return c;
+  }
+  Q.pinCounts = pinCounts;
+  function tierUsage() {
+    var st = S();
+    if (st.__tierUse && st.__tierUseFor === st.people) return st.__tierUse;
+    var u = Object.create(null), ppl = st.people;
+    for (var i = 0; i < ppl.length; i++) { var t = ppl[i].tier; if (t) u[t] = (u[t] || 0) + 1; }
+    st.__tierUse = u; st.__tierUseFor = ppl;
+    return u;
+  }
+  Q.tierUsage = tierUsage;
   function tierEditor(onChangeLive) {
     var st = S();
-    var usage = Object.create(null);
-    st.people.forEach(function (p) { if (p.tier) usage[p.tier] = (usage[p.tier] || 0) + 1; });
+    var usage = tierUsage();
     var names = Object.keys(st.tiers);
     var max = names.reduce(function (m, n) { return Math.max(m, st.tiers[n] || 0); }, 0) || 1;
     var wrap = el('div', 'tier-editor');
@@ -1647,7 +1853,7 @@ var Q = (function () {
   }
   function removeTier(name) {
     var st = S();
-    var affected = st.people.filter(function (p) { return p.tier === name; }).length;
+    var affected = tierUsage()[name] || 0;
     function doIt() {
       pushUndo('حذف فئة ' + name);
       delete st.tiers[name];
