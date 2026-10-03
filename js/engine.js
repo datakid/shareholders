@@ -707,6 +707,9 @@ function EngineFactory() {
   function dehydrate(res) {
     if (!res || !res.ok || !res.cols) return { res: res, transfer: [] };
     var c = res.cols, plain = {}, cols = { n: c.n, ids: c.ids, poolNames: c.poolNames, split: c.split, kPi: c.kPi }, transfer = [];
+    var allNum = true;
+    for (var q = 0; q < c.n; q++) if (typeof c.ids[q] !== 'number') { allNum = false; break; }
+    if (allNum && c.n) { cols.ids = Float64Array.from(c.ids); transfer.push(cols.ids.buffer); }
     Object.keys(res).forEach(function (k) { if (k !== 'people' && k !== 'assignment') plain[k] = res[k]; });
     COL_KEYS.forEach(function (k) { var a = c[k]; cols[k] = a; if (a && a.buffer && transfer.indexOf(a.buffer) === -1) transfer.push(a.buffer); });
     plain.__cols = cols;
@@ -727,7 +730,8 @@ function EngineFactory() {
     out.id = null;
     if (!seq) { out.id = new Array(n); for (i = 0; i < n; i++) out.id[i] = list[i].id; }
     out.name = new Array(n);
-    for (i = 0; i < n; i++) out.name[i] = list[i].name || '';
+    out.code = new Array(n);
+    for (i = 0; i < n; i++) { out.name[i] = list[i].name || ''; out.code[i] = list[i].code || ''; }
     function dict(key) {
       var map = new Map(), keys = [], idx = new Uint32Array(n);
       for (var j = 0; j < n; j++) {
@@ -741,6 +745,8 @@ function EngineFactory() {
     }
     out.tier = dict('tier');
     out.pinnedPool = dict('pinnedPool');
+    out.dept = dict('dept');
+    out.job = dict('job');
     PNUM.forEach(function (k) {
       var a = new Float64Array(n);
       for (var j = 0; j < n; j++) { var v = list[j][k]; a[j] = v == null ? NaN : v; }
@@ -754,13 +760,14 @@ function EngineFactory() {
   function unpackPeople(c) {
     var n = c.n, out = new Array(n);
     var tk = c.tier.keys, ti = c.tier.idx, pk = c.pinnedPool.keys, pi = c.pinnedPool.idx;
+    var dk = c.dept ? c.dept.keys : null, di = c.dept ? c.dept.idx : null, jk = c.job ? c.job.keys : null, ji = c.job ? c.job.idx : null;
     function num(a, j) { var v = a[j]; return v !== v ? null : v; }
     for (var i = 0; i < n; i++) {
       var pin = pk[pi[i]];
       out[i] = {
-        id: c.id ? c.id[i] : i + 1, name: c.name[i], tier: tk[ti[i]],
+        id: c.id ? c.id[i] : i + 1, code: c.code ? c.code[i] : '', name: c.name[i], job: jk ? jk[ji[i]] : '', dept: dk ? dk[di[i]] : '', tier: tk[ti[i]],
         daysWorked: num(c.daysWorked, i), penaltyRate: num(c.penaltyRate, i), manualFactor: num(c.manualFactor, i), overrideValue: num(c.overrideValue, i),
-        pinnedPool: pin === '' ? null : pin, excluded: !!c.excluded[i]
+        pinnedPool: pin === '' ? null : pin, excluded: !!c.excluded[i], notes: ''
       };
     }
     return out;
@@ -1008,17 +1015,67 @@ var Engine = EngineFactory();
 
 var EngineWorker = (function () {
   'use strict';
-  var THRESHOLD = 30000;
+  var THRESHOLD = 30000, VIEW_THRESHOLD = 150000;
   var worker = null, failed = false, seq = 0, pending = Object.create(null), url = null;
+  var synced = null, syncedVersion = 0, stats = { full: 0, diff: 0, diffRows: 0, lastSyncMs: 0, lastBytes: 0 };
+
   function body() {
-    self.onmessage = function (e) {
-      var m = e.data, out;
-      try {
-        var people = Engine.unpackPeople(m.people);
+    var people = null, version = 0, index = null, indexFor = -1;
+    function rowFrom(c, i) {
+      var tk = c.tier, dk = c.dept, jk = c.job, pk = c.pinnedPool;
+      return {
+        id: c.ids[i], code: c.code[i], name: c.name[i], job: jk.keys[jk.idx[i]], dept: dk.keys[dk.idx[i]], tier: tk.keys[tk.idx[i]],
+        daysWorked: c.daysWorked[i] !== c.daysWorked[i] ? null : c.daysWorked[i], penaltyRate: c.penaltyRate[i] !== c.penaltyRate[i] ? null : c.penaltyRate[i],
+        manualFactor: c.manualFactor[i] !== c.manualFactor[i] ? null : c.manualFactor[i], overrideValue: c.overrideValue[i] !== c.overrideValue[i] ? null : c.overrideValue[i],
+        pinnedPool: pk.keys[pk.idx[i]] === '' ? null : pk.keys[pk.idx[i]], excluded: !!c.excluded[i], notes: ''
+      };
+    }
+    function handle(m) {
+      if (m.type === 'sync') {
+        people = Engine.unpackPeople(m.people);
+        version = m.version; index = null;
+        return { version: version, n: people.length };
+      }
+      if (m.type === 'diff') {
+        if (!people || m.base !== version) throw new Error('stale-base');
+        var c = m.rows;
+        for (var k = 0; k < c.pos.length; k++) {
+          var pos = c.pos[k], np = rowFrom(c, k);
+          people[pos] = np;
+          if (index && index.entries[pos]) index.entries[pos] = Search.entry(np, pos);
+        }
+        version = m.version;
+        if (index) indexFor = version;
+        return { version: version, n: people.length };
+      }
+      if (m.type === 'compute') {
+        if (!people || m.version !== version) throw new Error('stale-base');
         var res = Engine.runPipeline({ people: people, tiers: m.tiers, pools: m.pools, periodDays: m.periodDays, options: m.options });
-        var d = Engine.dehydrate(res);
-        out = { id: m.id, ok: true, res: d.res };
-        self.postMessage(out, d.transfer);
+        return { __transfer: Engine.dehydrate(res) };
+      }
+      if (m.type === 'search') {
+        if (!people || m.version !== version) throw new Error('stale-base');
+        if (!index || indexFor !== version) { index = Search.buildIndex(people); indexFor = version; }
+        var r = Search.run(index, m.q);
+        if (!r) return { none: true };
+        return { __raw: { needle: r.needle, terms: r.terms, rows: r.rows, rank: r.rank, count: r.count, ranked: r.ranked }, __buffers: [r.rows.buffer, r.rank.buffer] };
+      }
+      if (m.type === 'sort') {
+        var vals = m.values, keys = m.keys, idx = m.idx;
+        var valueAt = keys ? function (i) { var v = keys[idx[i]]; return v === '' ? null : v; } : function (i) { var v = vals[i]; return v !== v ? null : v; };
+        var order = Sorter.sortIndex(m.count, valueAt, m.dir);
+        var out = Int32Array.from(order);
+        return { __raw: { order: out }, __buffers: [out.buffer] };
+      }
+      throw new Error('unknown-job');
+    }
+    self.onmessage = function (e) {
+      var m = e.data;
+      try {
+        var out = handle(m);
+        if (out && out.__transfer) self.postMessage({ id: m.id, ok: true, res: out.__transfer.res }, out.__transfer.transfer);
+        else if (out && out.__raw) self.postMessage({ id: m.id, ok: true, res: out.__raw }, out.__buffers);
+        else self.postMessage({ id: m.id, ok: true, res: out });
       } catch (err) {
         self.postMessage({ id: m.id, ok: false, error: String(err && err.message || err) });
       }
@@ -1031,8 +1088,11 @@ var EngineWorker = (function () {
     if (worker) return worker;
     if (!supported()) return null;
     try {
-      var src = EngineFactory.toString() + '\nvar Engine = EngineFactory();\n(' + body.toString() + ')();';
-      url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      var parts = [EngineFactory.toString(), 'var Engine = EngineFactory();'];
+      if (typeof SearchFactory === 'function') parts.push(SearchFactory.toString(), 'var Search = SearchFactory();');
+      if (typeof SorterFactory === 'function') parts.push(SorterFactory.toString(), 'var Sorter = SorterFactory();');
+      parts.push('(' + body.toString() + ')();');
+      url = URL.createObjectURL(new Blob([parts.join('\n')], { type: 'text/javascript' }));
       worker = new Worker(url);
       worker.onmessage = function (e) {
         var m = e.data, p = pending[m.id];
@@ -1045,7 +1105,7 @@ var EngineWorker = (function () {
         var keys = Object.keys(pending);
         keys.forEach(function (k) { pending[k].reject(new Error((e && e.message) || 'worker-error')); delete pending[k]; });
         try { worker.terminate(); } catch (x) {}
-        worker = null;
+        worker = null; synced = null;
         if (e && e.preventDefault) e.preventDefault();
       };
     } catch (err) {
@@ -1054,18 +1114,68 @@ var EngineWorker = (function () {
     }
     return worker;
   }
-  function run(state) {
+  function post(msg, transfer) {
     var w = ensure();
     if (!w) return Promise.reject(new Error('no-worker'));
     var id = ++seq;
-    var packed = Engine.packPeople(state.people || []);
+    msg.id = id;
     return new Promise(function (resolve, reject) {
       pending[id] = { resolve: resolve, reject: reject };
-      try {
-        w.postMessage({ id: id, people: packed.cols, tiers: state.tiers, pools: state.pools, periodDays: state.periodDays, options: state.options }, packed.transfer);
-      } catch (err) { delete pending[id]; reject(err); }
+      try { w.postMessage(msg, transfer || []); } catch (err) { delete pending[id]; reject(err); }
+    });
+  }
+
+  function packRows(list, positions) {
+    var n = positions.length, sub = new Array(n);
+    for (var i = 0; i < n; i++) sub[i] = list[positions[i]];
+    var p = Engine.packPeople(sub);
+    var ids = new Array(n);
+    for (var j = 0; j < n; j++) ids[j] = sub[j].id;
+    p.cols.ids = ids;
+    p.cols.pos = Int32Array.from(positions);
+    p.transfer.push(p.cols.pos.buffer);
+    return p;
+  }
+  function changedPositions(prev, next) {
+    if (!prev || prev.length !== next.length) return null;
+    var out = [], limit = Math.max(64, next.length >> 3);
+    for (var i = 0; i < next.length; i++) {
+      if (prev[i] !== next[i]) {
+        if (prev[i].id !== next[i].id) return null;
+        out.push(i);
+        if (out.length > limit) return null;
+      }
+    }
+    return out;
+  }
+  var syncing = Promise.resolve();
+  function sync(people) {
+    syncing = syncing.catch(function () {}).then(function () {
+      if (synced === people) return syncedVersion;
+      var t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      var diff = changedPositions(synced, people), v = syncedVersion + 1, job;
+      if (diff && diff.length === 0) { synced = people; return syncedVersion; }
+      if (diff) {
+        var pr = packRows(people, diff);
+        job = post({ type: 'diff', base: syncedVersion, version: v, rows: pr.cols }, pr.transfer).then(function () { stats.diff++; stats.diffRows += diff.length; stats.lastBytes = diff.length; });
+      } else {
+        var pk = Engine.packPeople(people);
+        job = post({ type: 'sync', version: v, people: pk.cols }, pk.transfer).then(function () { stats.full++; stats.lastBytes = people.length; });
+      }
+      return job.then(function () {
+        synced = people; syncedVersion = v;
+        stats.lastSyncMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+        return v;
+      }, function (err) { synced = null; throw err; });
+    });
+    return syncing;
+  }
+  function run(state) {
+    var people = state.people || [];
+    return sync(people).then(function (v) {
+      return post({ type: 'compute', version: v, tiers: state.tiers, pools: state.pools, periodDays: state.periodDays, options: state.options });
     }).then(function (plain) {
-      return Engine.hydrate(plain, { people: state.people, tiers: state.tiers, periodDays: state.periodDays });
+      return Engine.hydrate(plain, { people: people, tiers: state.tiers, periodDays: state.periodDays });
     });
   }
   function runAuto(state) {
@@ -1073,6 +1183,33 @@ var EngineWorker = (function () {
     if (n < THRESHOLD || !supported()) return Promise.resolve(Engine.runPipeline(state));
     return run(state).catch(function () { return Engine.runPipeline(state); });
   }
-  function terminate() { if (worker) { try { worker.terminate(); } catch (e) {} worker = null; } }
-  return { run: run, runAuto: runAuto, supported: supported, terminate: terminate, THRESHOLD: THRESHOLD, busy: function () { return Object.keys(pending).length > 0; } };
+  function search(people, q) {
+    return sync(people).then(function (v) { return post({ type: 'search', version: v, q: q }); });
+  }
+  function sortValues(values, dir) {
+    var n = values.length, numeric = true, seen = 0;
+    for (var i = 0; i < n && seen < 64; i++) { var x = values[i]; if (x == null || x === '') continue; seen++; if (typeof x !== 'number') { numeric = false; break; } }
+    var msg = { type: 'sort', count: n, dir: dir }, transfer = [];
+    if (numeric) {
+      var f = new Float64Array(n);
+      for (var j = 0; j < n; j++) { var v = values[j]; f[j] = (typeof v === 'number' && v === v) ? v : NaN; }
+      msg.values = f; transfer.push(f.buffer);
+    } else {
+      var map = new Map(), keys = [], idx = new Uint32Array(n);
+      for (var k = 0; k < n; k++) {
+        var s = values[k]; s = s == null ? '' : String(s);
+        var code = map.get(s);
+        if (code === undefined) { code = keys.length; map.set(s, code); keys.push(s); }
+        idx[k] = code;
+      }
+      msg.keys = keys; msg.idx = idx; transfer.push(idx.buffer);
+    }
+    return post(msg, transfer).then(function (r) { return r.order; });
+  }
+  function terminate() { if (worker) { try { worker.terminate(); } catch (e) {} worker = null; } synced = null; syncedVersion = 0; syncing = Promise.resolve(); }
+  return {
+    run: run, runAuto: runAuto, search: search, sortValues: sortValues, sync: sync, supported: supported, terminate: terminate,
+    THRESHOLD: THRESHOLD, VIEW_THRESHOLD: VIEW_THRESHOLD, stats: function () { return Object.assign({ synced: !!synced, version: syncedVersion }, stats); },
+    busy: function () { return Object.keys(pending).length > 0; }
+  };
 })();

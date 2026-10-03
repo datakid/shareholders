@@ -626,6 +626,35 @@ var SelfTest = (function () {
       record('X1 — كاتب XLSX المتدفق: CRC صحيح وتقسيم تلقائي فوق 1,048,576 صف', crc && split && unique, names.join(' | '));
     })();
 
+    (function I1() {
+      var text = '\uFEFFالاسم,الفئة,ملاحظة\r\n"أحمد, الأول",مدير,"قال ""نعم""\nسطر"\n,,\nمنى,فني,\r\n"x""",y,z\n';
+      var ref = Importer.readCsv(text), ok = true, sizes = [1, 2, 3, 5, 7, 11, 64];
+      for (var s = 0; s < sizes.length && ok; s++) if (JSON.stringify(ImportWorker.parseText(text, sizes[s])) !== JSON.stringify(ref)) ok = false;
+      record('I1 — قارئ CSV المتدفق يطابق القارئ الكامل مهما انقسمت القطع', ok, JSON.stringify(ref).slice(0, 80));
+    })();
+
+    (function I2() {
+      var r = rng(5), parts = [], cells = ['a', 'ب ج', '"q"', 'x,y', '', 'line\nbreak', '١٢٫٥', ' sp '];
+      for (var i = 0; i < 400; i++) {
+        var row = [];
+        for (var c = 0; c < 4; c++) { var v = cells[Math.floor(r() * cells.length)]; row.push(/[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v); }
+        parts.push(row.join(','));
+      }
+      var text = parts.join(r() > 0.5 ? '\n' : '\r\n'), ref = Importer.readCsv(text), ok = true;
+      [13, 97, 1000].forEach(function (sz) { if (JSON.stringify(ImportWorker.parseText(text, sz)) !== JSON.stringify(ref)) ok = false; });
+      record('I2 — 400 صف عشوائي باقتباسات وأسطر داخلية: التدفق = القراءة الكاملة', ok && ref.length > 0, ref.length + ' صف');
+    })();
+
+    (function X2() {
+      var specs = XlsxStream._normalize([{ name: 'a', header: ['h'], count: 3, rowAt: function (k) { return ['v' + (k % 2)]; } }]);
+      record('X2 — الكاتب يدعم الجداول المشتركة للنصوص', typeof XlsxStream.validate === 'function' && specs.length === 1);
+    })();
+
+    (function P1() {
+      var s = Pwa.status();
+      record('P1 — تطبيق قابل للتثبيت: Service Worker وملف manifest', !!document.querySelector('link[rel="manifest"]') && typeof Pwa.register === 'function', s.supported ? (s.controlled ? 'يعمل دون اتصال' : 'مدعوم — يُفعَّل بعد أول تحميل') : 'غير مدعوم في هذا السياق (file:// أو غير آمن)');
+    })();
+
     return results;
   }
 

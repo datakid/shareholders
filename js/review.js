@@ -302,12 +302,14 @@
       count.appendChild(el('b', 'num', Fmt.int(shown)));
       count.appendChild(document.createTextNode(shown === total ? ' صف' : ' من ' + Fmt.int(total)));
     }
+    var token = 0;
     function changed() {
       st.page[opts.pageKey] = 1;
       paintChips();
       Object.keys(dds).forEach(function (k) { dds[k].setValue(st.filters[k]); });
       Q.scheduleSave();
-      opts.onChange();
+      var my = ++token;
+      Q.prepareView().then(function () { if (my === token) opts.onChange(); });
     }
     paintChips();
     return { el: root, refresh: paintChips, setCount: setCount, search: si };

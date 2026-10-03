@@ -1,4 +1,4 @@
-var APP_VERSION = '4.0.0';
+var APP_VERSION = '4.1.0';
 var APP_NAME = 'قِسمة';
 var APP_NAME_LATIN = 'Qisma';
 var APP_TAGLINE = 'قسمة عادلة، محسوبة بالقرش';
@@ -195,7 +195,7 @@ var Icons = (function () {
   return { svg: svg, brandMark: brandMark, has: function (n) { return !!P[n]; } };
 })();
 
-var Search = (function () {
+function SearchFactory() {
   'use strict';
   var EXACT = 1000, PREFIX = 700, WORD_PREFIX = 600, SUBSTRING = 500, SUBSEQ = 300, TYPO = 150;
 
@@ -349,10 +349,12 @@ var Search = (function () {
     if (pos < raw.length) frag.appendChild(document.createTextNode(raw.slice(pos)));
     return frag;
   }
-  return { buildIndex: buildIndex, run: run, highlight: highlight, scoreEntry: scoreEntry, withinOneEdit: withinOneEdit, isSubsequence: isSubsequence, TIERS: { EXACT: EXACT, PREFIX: PREFIX, WORD_PREFIX: WORD_PREFIX, SUBSTRING: SUBSTRING, SUBSEQ: SUBSEQ, TYPO: TYPO } };
-})();
+  function entry(p, i) { return new Entry(p, i); }
+  return { buildIndex: buildIndex, run: run, highlight: highlight, scoreEntry: scoreEntry, withinOneEdit: withinOneEdit, isSubsequence: isSubsequence, entry: entry, TIERS: { EXACT: EXACT, PREFIX: PREFIX, WORD_PREFIX: WORD_PREFIX, SUBSTRING: SUBSTRING, SUBSEQ: SUBSEQ, TYPO: TYPO } };
+}
+var Search = SearchFactory();
 
-var Sorter = (function () {
+function SorterFactory() {
   'use strict';
   var collator = (function () {
     try { return new Intl.Collator('ar', { numeric: true, sensitivity: 'base' }); }
@@ -382,8 +384,13 @@ var Sorter = (function () {
   function sortIndex(count, valueAt, dir) {
     var sign = dir === 'desc' ? -1 : 1, i, order = new Array(count);
     for (i = 0; i < count; i++) order[i] = i;
-    var numeric = true, probe = Math.min(count, 64);
-    for (i = 0; i < probe; i++) { var pv = valueAt(i); if (pv != null && pv !== '' && typeof pv !== 'number') { numeric = false; break; } }
+    var numeric = true, seen = 0;
+    for (i = 0; i < count && seen < 64; i++) {
+      var pv = valueAt(i);
+      if (pv == null || pv === '') continue;
+      seen++;
+      if (typeof pv !== 'number') { numeric = false; break; }
+    }
     if (numeric) {
       var nv = new Float64Array(count), empty = new Uint8Array(count);
       for (i = 0; i < count; i++) {
@@ -426,6 +433,46 @@ var Sorter = (function () {
     return out;
   }
   return { sortRows: sortRowsFast, sortRowsLegacy: sortRows, sortIndex: sortIndex, compareValues: compareValues, nextDir: nextDir };
+}
+var Sorter = SorterFactory();
+
+var Pwa = (function () {
+  'use strict';
+  var state = { registered: false, error: '', waiting: null };
+  function canRegister() {
+    return typeof navigator !== 'undefined' && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol) && window.isSecureContext !== false;
+  }
+  function notify(reg) {
+    state.waiting = reg.waiting;
+    if (typeof UI === 'undefined' || !UI.toast) return;
+    UI.toast('نسخة أحدث من ' + APP_NAME + ' جاهزة', 'ok', { label: 'تحديث الآن', onClick: function () { if (reg.waiting) reg.waiting.postMessage({ type: 'skip-waiting' }); } });
+  }
+  function register() {
+    if (!canRegister() || state.registered) return Promise.resolve(null);
+    state.registered = true;
+    var reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (reloading || !state.waiting) return;
+      reloading = true;
+      if (typeof Store !== 'undefined') Store.flushAll();
+      location.reload();
+    });
+    return navigator.serviceWorker.register('sw.js').then(function (reg) {
+      if (reg.waiting && navigator.serviceWorker.controller) notify(reg);
+      reg.addEventListener('updatefound', function () {
+        var nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', function () {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) notify(reg);
+        });
+      });
+      return reg;
+    }, function (e) { state.error = String(e && e.message || e); return null; });
+  }
+  function status() {
+    return { supported: canRegister(), registered: state.registered, error: state.error, controlled: !!(typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) };
+  }
+  return { register: register, status: status, canRegister: canRegister };
 })();
 
 var Pack = (function () {

@@ -107,6 +107,18 @@ var XlsxStream = (function () {
     return w.map(function (x) { return Math.min(44, Math.max(8, x || 0) + 2); });
   }
 
+  function SST(limit) { this.map = new Map(); this.list = []; this.refs = 0; this.limit = limit; this.inline = 0; }
+  SST.prototype.idx = function (s) {
+    var k = this.map.get(s);
+    if (k === undefined) {
+      if (this.list.length >= this.limit) return -1;
+      k = this.list.length; this.map.set(s, k); this.list.push(s);
+    }
+    this.refs++;
+    return k;
+  };
+  var curSst = null;
+
   function cellXml(r, c, v, style) {
     if (v == null || v === '') return '';
     var ref = colName(c) + r;
@@ -116,6 +128,11 @@ var XlsxStream = (function () {
     }
     if (typeof v === 'boolean') return '<c r="' + ref + '" t="b"' + (style ? ' s="' + style + '"' : '') + '><v>' + (v ? 1 : 0) + '</v></c>';
     var s = String(v);
+    if (curSst) {
+      var si = curSst.idx(s);
+      if (si >= 0) return '<c r="' + ref + '" t="s"' + (style ? ' s="' + style + '"' : '') + '><v>' + si + '</v></c>';
+      curSst.inline++;
+    }
     var sp = /^\s|\s$/.test(s) ? ' xml:space="preserve"' : '';
     return '<c r="' + ref + '" t="inlineStr"' + (style ? ' s="' + style + '"' : '') + '><is><t' + sp + '>' + esc(s) + '</t></is></c>';
   }
@@ -276,11 +293,31 @@ var XlsxStream = (function () {
 
   function quoteSheet(n) { return "'" + n.replace(/'/g, "''") + "'"; }
 
+  function sstChunks(sst) {
+    var i = 0, phase = 0, BATCH = 20000;
+    return function () {
+      if (phase === 0) { phase = 1; return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="' + sst.refs + '" uniqueCount="' + sst.list.length + '">'; }
+      if (phase === 1) {
+        if (i < sst.list.length) {
+          var end = Math.min(sst.list.length, i + BATCH), out = '';
+          for (var k = i; k < end; k++) { var s = sst.list[k]; out += '<si><t' + (/^\s|\s$/.test(s) ? ' xml:space="preserve"' : '') + '>' + esc(s) + '</t></si>'; }
+          i = end;
+          return out;
+        }
+        phase = 2;
+        return '</sst>';
+      }
+      return null;
+    };
+  }
+
   function write(sheets, meta, onProgress) {
     if (!available()) return Promise.reject(new Error('المتصفح لا يدعم الكتابة المتدفقة'));
     var list = normalize(sheets || []);
     if (!list.length) return Promise.reject(new Error('لا أوراق للتصدير'));
     meta = meta || {};
+    var useSst = meta.sharedStrings !== false;
+    var sst = useSst ? new SST(meta.sstLimit || 2000000) : null;
     var totalRows = 0, doneRows = 0;
     list.forEach(function (sh, i) { sh.index = i; totalRows += sh.to - sh.from; });
     function onRows(n) { doneRows += n; if (onProgress && totalRows) onProgress(Math.min(1, doneRows / totalRows)); }
@@ -289,6 +326,7 @@ var XlsxStream = (function () {
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
       '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      (useSst ? '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>' : '') +
       '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>' +
       list.map(function (s, i) { return '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'; }).join('') +
       '</Types>';
@@ -301,7 +339,9 @@ var XlsxStream = (function () {
       '<dcterms:created xsi:type="dcterms:W3CDTF">' + iso + '</dcterms:created></cp:coreProperties>';
     var wbRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
       list.map(function (s, i) { return '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>'; }).join('') +
-      '<Relationship Id="rId' + (list.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>';
+      '<Relationship Id="rId' + (list.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      (useSst ? '<Relationship Id="rId' + (list.length + 2) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' : '') +
+      '</Relationships>';
 
     var chain = zip.addText('[Content_Types].xml', ct)
       .then(function () { return zip.addText('_rels/.rels', rels); })
@@ -309,8 +349,12 @@ var XlsxStream = (function () {
       .then(function () { return zip.addText('xl/styles.xml', STYLES); })
       .then(function () { return zip.addText('xl/_rels/workbook.xml.rels', wbRels); });
     list.forEach(function (sh, i) {
-      chain = chain.then(function () { return zip.addEntry('xl/worksheets/sheet' + (i + 1) + '.xml', sheetChunks(sh, onRows)); });
+      chain = chain.then(function () {
+        var gen = sheetChunks(sh, onRows);
+        return zip.addEntry('xl/worksheets/sheet' + (i + 1) + '.xml', function () { curSst = sst; try { return gen(); } finally { curSst = null; } });
+      });
     });
+    if (useSst) chain = chain.then(function () { return zip.addEntry('xl/sharedStrings.xml', sstChunks(sst)); });
     return chain.then(function () {
       var names = '';
       list.forEach(function (sh, i) {
@@ -326,9 +370,108 @@ var XlsxStream = (function () {
       return zip.addText('xl/workbook.xml', wb);
     }).then(function () {
       if (onProgress) onProgress(1);
-      return { blob: zip.finish('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'), sheets: list.length, rows: totalRows, compressed: zip.deflate };
+      return { blob: zip.finish('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'), sheets: list.length, rows: totalRows, compressed: zip.deflate, sharedStrings: sst ? { unique: sst.list.length, refs: sst.refs, inline: sst.inline } : null };
     });
   }
 
-  return { write: write, available: available, canDeflate: canDeflate, crc32: function (b) { return crcUpdate(0, b); }, MAX_ROWS: MAX_ROWS, _normalize: normalize };
+  function rd16(b, o) { return b[o] | (b[o + 1] << 8); }
+  function rd32(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
+  function inflate(bytes) {
+    var ds = new DecompressionStream('deflate-raw');
+    return new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer().then(function (b) { return new Uint8Array(b); });
+  }
+  function unzip(buf) {
+    var eocd = -1;
+    for (var i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (rd32(buf, i) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) return Promise.reject(new Error('no EOCD'));
+    var count = rd16(buf, eocd + 10), cd = rd32(buf, eocd + 16), entries = [], p = cd;
+    for (var k = 0; k < count; k++) {
+      if (rd32(buf, p) !== 0x02014b50) return Promise.reject(new Error('bad central header at ' + p));
+      var method = rd16(buf, p + 10), crc = rd32(buf, p + 16), cs = rd32(buf, p + 20), us = rd32(buf, p + 24);
+      var nl = rd16(buf, p + 28), el = rd16(buf, p + 30), cl = rd16(buf, p + 32), off = rd32(buf, p + 42);
+      var name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nl));
+      if (rd32(buf, off) !== 0x04034b50) return Promise.reject(new Error('bad local header ' + name));
+      var lnl = rd16(buf, off + 26), lel = rd16(buf, off + 28), ds = off + 30 + lnl + lel;
+      entries.push({ name: name, method: method, crc: crc, cs: cs, us: us, data: buf.subarray(ds, ds + cs) });
+      p += 46 + nl + el + cl;
+    }
+    return Promise.all(entries.map(function (e) {
+      return (e.method === 8 ? inflate(e.data) : Promise.resolve(e.data)).then(function (u) { e.bytes = u; return e; });
+    }));
+  }
+  function validate(blob) {
+    var problems = [], info = {};
+    function bad(m) { if (problems.length < 40) problems.push(m); }
+    return blob.arrayBuffer().then(function (ab) { return unzip(new Uint8Array(ab)); }).then(function (entries) {
+      var files = Object.create(null), dec = new TextDecoder('utf-8', { fatal: true }), parser = new DOMParser();
+      entries.forEach(function (e) {
+        if (e.bytes.length !== e.us) bad(e.name + ': size ' + e.bytes.length + ' != ' + e.us);
+        if (crcUpdate(0, e.bytes) !== e.crc) bad(e.name + ': CRC mismatch');
+        var txt;
+        try { txt = dec.decode(e.bytes); } catch (x) { bad(e.name + ': not UTF-8'); return; }
+        var doc = parser.parseFromString(txt, 'application/xml');
+        if (doc.getElementsByTagName('parsererror').length) { bad(e.name + ': XML not well-formed'); return; }
+        files[e.name] = doc;
+      });
+      info.parts = Object.keys(files).length;
+      ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml'].forEach(function (n) { if (!files[n]) bad('missing ' + n); });
+      if (problems.length) return { ok: false, problems: problems, info: info };
+      var ct = files['[Content_Types].xml'], overrides = Object.create(null);
+      Array.prototype.forEach.call(ct.getElementsByTagName('Override'), function (o) { overrides[o.getAttribute('PartName').slice(1)] = o.getAttribute('ContentType'); });
+      Object.keys(files).forEach(function (n) { if (!/\.rels$/.test(n) && n !== '[Content_Types].xml' && !overrides[n]) bad('no content type for ' + n); });
+      Object.keys(overrides).forEach(function (n) { if (!files[n]) bad('content type for missing part ' + n); });
+      var rels = files['xl/_rels/workbook.xml.rels'], relMap = Object.create(null);
+      Array.prototype.forEach.call(rels.getElementsByTagName('Relationship'), function (r) {
+        var t = 'xl/' + r.getAttribute('Target');
+        relMap[r.getAttribute('Id')] = t;
+        if (!files[t]) bad('relationship to missing ' + t);
+      });
+      var styles = files['xl/styles.xml'], xfCount = styles.getElementsByTagName('cellXfs')[0].getElementsByTagName('xf').length;
+      var sstDoc = files['xl/sharedStrings.xml'], sstN = sstDoc ? sstDoc.getElementsByTagName('si').length : 0;
+      if (sstDoc && Number(sstDoc.documentElement.getAttribute('uniqueCount')) !== sstN) bad('sst uniqueCount mismatch');
+      info.sharedStrings = sstN;
+      var wb = files['xl/workbook.xml'], names = {}, sheets = wb.getElementsByTagName('sheet');
+      info.sheets = [];
+      Array.prototype.forEach.call(sheets, function (s) {
+        var nm = s.getAttribute('name'), rid = s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+        if (!nm || nm.length > 31 || /[\\\/\?\*\[\]:]/.test(nm)) bad('invalid sheet name ' + nm);
+        if (names[nm.toLowerCase()]) bad('duplicate sheet name ' + nm);
+        names[nm.toLowerCase()] = 1;
+        var path = relMap[rid], doc = files[path];
+        if (!doc) { bad('sheet ' + nm + ' has no part'); return; }
+        var rows = doc.getElementsByTagName('row'), lastR = 0, maxC = 0, cells = 0, maxRowSeen = 0;
+        for (var i = 0; i < rows.length; i++) {
+          var r = Number(rows[i].getAttribute('r'));
+          if (!(r > lastR)) bad(nm + ': row order ' + r + ' after ' + lastR);
+          if (r > 1048576) bad(nm + ': row beyond Excel limit');
+          lastR = r; maxRowSeen = r;
+          var cs = rows[i].getElementsByTagName('c'), lastC = -1;
+          for (var j = 0; j < cs.length; j++) {
+            var c = cs[j], ref = c.getAttribute('r'), m = /^([A-Z]+)(\d+)$/.exec(ref);
+            if (!m || Number(m[2]) !== r) { bad(nm + ': bad ref ' + ref); continue; }
+            var col = 0; for (var q = 0; q < m[1].length; q++) col = col * 26 + m[1].charCodeAt(q) - 64;
+            if (col <= lastC) bad(nm + ': column order at ' + ref);
+            lastC = col; if (col > maxC) maxC = col;
+            var st = Number(c.getAttribute('s') || 0);
+            if (st >= xfCount) bad(nm + ': style ' + st + ' out of range at ' + ref);
+            var t = c.getAttribute('t');
+            if (t === 's') { var v = Number(c.getElementsByTagName('v')[0].textContent); if (!(v >= 0 && v < sstN)) bad(nm + ': sst index ' + v + ' out of range at ' + ref); }
+            else if (!t) { var vv = c.getElementsByTagName('v')[0]; if (vv && !isFinite(Number(vv.textContent))) bad(nm + ': non-numeric value at ' + ref); }
+            cells++;
+          }
+        }
+        var dim = doc.getElementsByTagName('dimension')[0];
+        if (dim) {
+          var dm = /^A1:([A-Z]+)(\d+)$/.exec(dim.getAttribute('ref'));
+          if (!dm) bad(nm + ': bad dimension');
+          else if (Number(dm[2]) < maxRowSeen) bad(nm + ': dimension rows ' + dm[2] + ' < ' + maxRowSeen);
+        }
+        var view = doc.getElementsByTagName('sheetView')[0];
+        info.sheets.push({ name: nm, rows: rows.length, cells: cells, rtl: !!view && view.getAttribute('rightToLeft') === '1' });
+      });
+      return { ok: !problems.length, problems: problems, info: info };
+    }).catch(function (e) { problems.push(String(e && e.message || e)); return { ok: false, problems: problems, info: info }; });
+  }
+
+  return { write: write, validate: validate, available: available, canDeflate: canDeflate, crc32: function (b) { return crcUpdate(0, b); }, MAX_ROWS: MAX_ROWS, _normalize: normalize };
 })();

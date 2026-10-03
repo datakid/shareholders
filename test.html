@@ -65,6 +65,24 @@ document.querySelector('iframe').addEventListener('load', async function () {
       streamDetail = out.blob.size + 'B ' + (out.compressed ? 'deflate' : 'store') + ' ' + checks.map(function (c) { return c ? 1 : 0; }).join('') + ' z=' + (cell && cell.z) + ' rows=' + aoa.length;
     } catch (e) { streamDetail = String(e); }
 
+    var diffOk = false, searchOk = false, importOk = false, validOk = false;
+    try {
+      var edited = people.slice();
+      edited[5] = Object.assign({}, edited[5], { penaltyRate: 0.4 });
+      var before = win.EngineWorker.stats().diff;
+      var r1 = await win.EngineWorker.run(Object.assign({}, input, { people: edited }));
+      var r0 = win.Engine.runPipeline(Object.assign({}, input, { people: edited }));
+      diffOk = win.EngineWorker.stats().diff === before + 1 && r1.totals.net === r0.totals.net;
+      var ws = await win.EngineWorker.search(edited, 'محمد');
+      var ms = win.Search.run(win.Search.buildIndex(edited), 'محمد');
+      searchOk = !!ws && ws.count === ms.count;
+      var csvText = 'الاسم,الفئة\n"أ, ب",مدير\nج,"س\nص"\n';
+      var imp = await win.ImportWorker.read(new File([csvText], 'x.csv'), 'csv');
+      importOk = JSON.stringify(imp.sheets[0].grid) === JSON.stringify(win.Importer.readCsv(csvText));
+      var vres = await win.XlsxStream.validate(out.blob);
+      validOk = vres.ok;
+    } catch (e) { console.error(e); }
+
     var st = win.App.internals.getState();
     st.ui.viewMode = 'scroll';
     find('.step-pill', 'المراجعة').click();
@@ -73,7 +91,7 @@ document.querySelector('iframe').addEventListener('load', async function () {
     var virtualOk = !!win.document.querySelector('.vgrid-wrap') && vRows > 0 && vRows < 80;
     st.ui.viewMode = 'pages';
 
-    var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText, stepperFits: stepperFits, workerOk: workerOk, workerMs: workerMs, streamOk: streamOk, streamDetail: streamDetail, virtualOk: virtualOk, offlineXlsx: !!win.XLSX && !win.__sheetJsLocalFailed };
+    var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText, stepperFits: stepperFits, workerOk: workerOk, workerMs: workerMs, streamOk: streamOk, streamDetail: streamDetail, virtualOk: virtualOk, workerDiffOk: diffOk, workerSearchOk: searchOk, streamImportOk: importOk, ooxmlValid: validOk, manifest: !!win.document.querySelector('link[rel="manifest"]'), offlineXlsx: !!win.XLSX && !win.__sheetJsLocalFailed };
     document.getElementById('results').textContent = (results.length - failed.length) + '/' + results.length + ' ناجح\n' + JSON.stringify(integration);
     console.log('QISMA_TESTS ' + JSON.stringify({ total: results.length, failed: failed, integration: integration }));
     console.log('QISMA_PERF ' + JSON.stringify(results.filter(function (r) { return /^(S2|S3|T11|T22)/.test(r.name); }).map(function (r) { return r.name.slice(0, 3) + ': ' + r.detail; })));

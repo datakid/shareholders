@@ -364,21 +364,25 @@ var Q = (function () {
   Q.activeFilterLines = activeFilterLines;
 
   var lastSearch = { rows: null, q: null, res: null };
+  var workerSearch = { people: null, q: null, res: null };
+  var workerSort = { rows: null, sig: null, len: -1, order: null };
   function searchFor(rows, q) {
     if (lastSearch.rows === rows && lastSearch.q === q) return lastSearch.res;
+    var st = S();
+    if (workerSearch.people === st.people && workerSearch.q === q && rows.length === st.people.length) {
+      lastSearch = { rows: rows, q: q, res: workerSearch.res };
+      return workerSearch.res;
+    }
     var res = Search.run(searchIndex(), q);
     lastSearch = { rows: rows, q: q, res: res };
     return res;
   }
-  function viewRows(opts) {
-    var st = S(), rows = rowsCache(), f = st.filters || emptyFilters();
-    var noSort = !!(opts && opts.noSort);
-    var sortKey = noSort ? '' : (st.sort && st.sort.key && st.sort.dir ? st.sort.key + ':' + st.sort.dir : '');
-    var sig = JSON.stringify([f.q, f.dept, f.tier, f.pool, f.flags, sortKey, st.baseline ? st.baseline.at : 0]);
-    if (st.__view && st.__viewRows === rows && st.__viewSig === sig && st.__viewResult === st.result) { st.__lastNeedle = st.__viewNeedle; return st.__view; }
-    var res = null;
-    if (f.q) { res = searchFor(rows, f.q); st.__lastNeedle = res ? res.needle : ''; }
-    else st.__lastNeedle = '';
+  function filterSig(st) {
+    var f = st.filters || emptyFilters();
+    return JSON.stringify([f.q, f.dept, f.tier, f.pool, f.flags, st.baseline ? st.baseline.at : 0]);
+  }
+  function filterRows(st, rows, res) {
+    var f = st.filters || emptyFilters();
     var defs = (f.flags || []).map(flagDef).filter(Boolean);
     var n = rows.length, out = [], hitRows = res && res.rows;
     for (var i = 0; i < n; i++) {
@@ -391,12 +395,66 @@ var Q = (function () {
       for (var k = 0; k < defs.length; k++) if (!defs[k].test(r)) { ok2 = false; break; }
       if (ok2) out.push(r);
     }
+    return out;
+  }
+  function sortAccessor(st) {
+    var col = colDef(st.sort.key);
+    if (col) return function (r) { return col.get(r); };
+    if (st.sort.key === 'delta') { var d = baselineDiff(); if (d) return function (r) { return d.byId[r.id]; }; }
+    return null;
+  }
+  function viewInWorker(st) { return st.__app && rowsCache().length >= EngineWorker.VIEW_THRESHOLD && EngineWorker.supported(); }
+  var viewGen = 0;
+  function prepareView() {
+    var st = S();
+    if (!viewInWorker(st)) return Promise.resolve(false);
+    var my = ++viewGen, f = st.filters || emptyFilters(), people = st.people, rows = rowsCache(), t0 = performance.now();
+    var needSearch = !!f.q && !(workerSearch.people === people && workerSearch.q === f.q) && !(lastSearch.rows === rows && lastSearch.q === f.q);
+    var sortKey = st.sort && st.sort.key && st.sort.dir ? st.sort.key + ':' + st.sort.dir : '';
+    var fsig = filterSig(st), wantSig = fsig + '|' + sortKey;
+    var needSort = !!sortKey && !(workerSort.rows === rows && workerSort.sig === wantSig);
+    if (!needSearch && !needSort) return Promise.resolve(false);
+    Busy.softShow(needSearch ? 'جارٍ البحث في ' + Fmt.int(rows.length) + ' صف في الخلفية…' : 'جارٍ الترتيب في الخلفية…');
+    var p = needSearch ? EngineWorker.search(people, f.q).then(function (r) {
+      var res = r && !r.none ? r : null;
+      workerSearch = { people: people, q: f.q, res: res };
+    }) : Promise.resolve();
+    return p.then(function () {
+      if (!needSort || my !== viewGen) return;
+      var acc = sortAccessor(st);
+      if (!acc) return;
+      var out = filterRows(st, rows, f.q ? searchFor(rows, f.q) : null);
+      var vals = new Array(out.length);
+      for (var i = 0; i < out.length; i++) vals[i] = acc(out[i]);
+      return EngineWorker.sortValues(vals, st.sort.dir).then(function (order) {
+        workerSort = { rows: rows, sig: wantSig, len: out.length, order: order };
+      });
+    }).then(function () {
+      Busy.softHide();
+      st.__lastViewMs = performance.now() - t0;
+      return my === viewGen;
+    }, function () { Busy.softHide(); return my === viewGen; });
+  }
+  Q.prepareView = prepareView;
+  function viewRows(opts) {
+    var st = S(), rows = rowsCache(), f = st.filters || emptyFilters();
+    var noSort = !!(opts && opts.noSort);
+    var sortKey = noSort ? '' : (st.sort && st.sort.key && st.sort.dir ? st.sort.key + ':' + st.sort.dir : '');
+    var sig = JSON.stringify([f.q, f.dept, f.tier, f.pool, f.flags, sortKey, st.baseline ? st.baseline.at : 0]);
+    if (st.__view && st.__viewRows === rows && st.__viewSig === sig && st.__viewResult === st.result) { st.__lastNeedle = st.__viewNeedle; return st.__view; }
+    var res = null;
+    if (f.q) { res = searchFor(rows, f.q); st.__lastNeedle = res ? res.needle : ''; }
+    else st.__lastNeedle = '';
+    var out = filterRows(st, rows, res);
     if (sortKey) {
-      var col = colDef(st.sort.key);
-      if (col) out = Sorter.sortRows(out, col.key, st.sort.dir, function (r) { return col.get(r); });
-      else if (st.sort.key === 'delta') {
-        var d = baselineDiff();
-        if (d) out = Sorter.sortRows(out, 'delta', st.sort.dir, function (r) { return d.byId[r.id]; });
+      var wantSig = filterSig(st) + '|' + sortKey;
+      if (workerSort.rows === rows && workerSort.sig === wantSig && workerSort.len === out.length) {
+        var ord = workerSort.order, sorted = new Array(out.length);
+        for (var oi = 0; oi < ord.length; oi++) sorted[oi] = out[ord[oi]];
+        out = sorted;
+      } else {
+        var acc = sortAccessor(st);
+        if (acc) out = Sorter.sortRows(out, st.sort.key, st.sort.dir, acc);
       }
     } else if (res) {
       var pos = idPos(), rank = res.rank;
@@ -1200,14 +1258,39 @@ var Q = (function () {
   function handleFile(file) {
     if (/\.json$/i.test(file.name) || file.type === 'application/json') { Q.readBundleFile(file); return; }
     var textual = /\.(csv|tsv|txt)$/i.test(file.name);
-    var limit = textual ? 400 : 150;
+    var limit = textual ? (typeof ImportWorker !== 'undefined' && ImportWorker.supported() ? 1024 : 400) : 150;
     if (file.size > limit * 1024 * 1024) { UI.toast('الملف أكبر من ' + limit + ' م.ب' + (textual ? '' : ' — احفظه كـ CSV ليُقرأ أسرع وبحجم أكبر'), 'danger'); return; }
     guardReplace(function () { readFile(file); }, 'الملف الجديد');
   }
   Q.handleFile = handleFile;
 
+  function finishSheets(sheets, file) {
+    (sheets || []).forEach(function (s) { cleanGrid(s.grid); });
+    var best = (sheets || []).slice().sort(function (a, b) { return b.grid.length - a.grid.length; })[0];
+    if (!best || best.grid.length < 2) { UI.toast('الملف يحتاج صف عناوين وصف بيانات واحد على الأقل', 'warn'); return; }
+    loadGrid(best.grid, file.name, best.name, sheets.length > 1 ? sheets : null);
+  }
   function readFile(file) {
     var isText = /\.(csv|tsv|txt)$/i.test(file.name) || /^text\//.test(file.type);
+    if (typeof ImportWorker !== 'undefined' && ImportWorker.supported() && (isText || file.size > 2 * 1024 * 1024)) {
+      var t0 = performance.now(), label = '«' + file.name + '» (' + Fmt.kb(file.size) + ')';
+      Busy.show('جارٍ قراءة ' + label + ' في الخلفية… 0%');
+      ImportWorker.read(file, isText ? 'csv' : 'xlsx', function (p, m) {
+        Busy.set('جارٍ قراءة ' + label + ' في الخلفية… ' + Math.round(p * 100) + '%' + (m && m.rows ? ' — ' + Fmt.int(m.rows) + ' صف' : ''));
+      }).then(function (res) {
+        Busy.hide();
+        Q.lastImport = { ms: performance.now() - t0, bytes: file.size, rows: res.sheets.reduce(function (s, x) { return s + x.grid.length; }, 0), worker: true };
+        finishSheets(res.sheets, file);
+      }, function (err) {
+        Busy.hide();
+        if (String(err && err.message) === 'xlsx-unavailable' || String(err && err.message) === 'no-worker') { readFileMain(file, isText); return; }
+        UI.toast('الملف غير مقروء — تأكد أنه Excel أو CSV صحيح وغير محمي بكلمة مرور', 'danger');
+      });
+      return;
+    }
+    readFileMain(file, isText);
+  }
+  function readFileMain(file, isText) {
     if (!isText && !Exporter.available()) {
       UI.toast('محرك Excel غير محمّل (الملف المحلي vendor/xlsx.full.min.js مفقود). احفظ الملف كـ CSV أو الصقه من Excel.', 'danger');
       return;
@@ -1231,11 +1314,8 @@ var Q = (function () {
           UI.toast('الملف غير مقروء — تأكد أنه Excel أو CSV صحيح وغير محمي بكلمة مرور', 'danger');
           return;
         }
-        (sheets || []).forEach(function (s) { cleanGrid(s.grid); });
         Busy.hide();
-        var best = sheets.slice().sort(function (a, b) { return b.grid.length - a.grid.length; })[0];
-        if (!best || best.grid.length < 2) { UI.toast('الملف يحتاج صف عناوين وصف بيانات واحد على الأقل', 'warn'); return; }
-        loadGrid(best.grid, file.name, best.name, sheets.length > 1 ? sheets : null);
+        finishSheets(sheets, file);
       }, 30);
     };
     reader.readAsArrayBuffer(file);

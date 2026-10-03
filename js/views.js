@@ -338,7 +338,7 @@
         st.sort = { key: dir ? key : null, dir: dir };
         st.page.dashboard = 1;
         Q.scheduleSave();
-        renderTable();
+        Q.prepareView().then(renderTable);
       });
       th.appendChild(b);
       return th;
@@ -1042,13 +1042,30 @@
       clearNode(listEl);
       var q = Engine.normalizeLoose(inp.value);
       items = all.filter(function (c) { return !q || Engine.normalizeLoose(c.label + ' ' + c.group).indexOf(q) !== -1; });
-      if (q && Q.hasData()) {
-        var res = Search.run(Q.searchIndex(), inp.value);
+      var big = Q.hasData() && S().people.length >= EngineWorker.VIEW_THRESHOLD && EngineWorker.supported();
+      function personItems(res) {
+        var out = [];
         if (res) res.ranked.slice(0, 6).forEach(function (h) {
           var r = Q.rowById()[h.id];
-          if (r) items.push({ group: 'أشخاص', icon: 'person', label: r.name || 'صف ' + r.id, hint: [r.dept, r.tier, r.netPiastres ? Fmt.piastres(r.netPiastres) + ' ج.م' : ''].filter(Boolean).join(' · '), run: function () { Q.openPerson(r.id); } });
+          if (r) out.push({ group: 'أشخاص', icon: 'person', label: r.name || 'صف ' + r.id, hint: [r.dept, r.tier, r.netPiastres ? Fmt.piastres(r.netPiastres) + ' ج.م' : ''].filter(Boolean).join(' · '), run: function () { Q.openPerson(r.id); } });
         });
+        return out;
       }
+      if (q && Q.hasData() && !big) items = items.concat(personItems(Search.run(Q.searchIndex(), inp.value)));
+      else if (q && big) {
+        var asked = inp.value;
+        EngineWorker.search(S().people, asked).then(function (r) {
+          if (inp.value !== asked || !inp.isConnected || !r || r.none) return;
+          var extra = personItems(r);
+          if (!extra.length) return;
+          items = all.filter(function (c) { return Engine.normalizeLoose(c.label + ' ' + c.group).indexOf(Engine.normalizeLoose(asked)) !== -1; }).concat(extra);
+          draw();
+        }, function () {});
+      }
+      draw();
+    }
+    function draw() {
+      clearNode(listEl);
       idx = Math.min(idx, Math.max(0, items.length - 1));
       var lastGroup = null;
       items.forEach(function (c, i) {
@@ -1166,6 +1183,7 @@
     else if (sess && !sess.__error && ((sess.people && sess.people.length) || (sess.sourceGrid && sess.sourceGrid.length) || (sess.rawRows && sess.rawRows.length))) st.__restore = sess;
     else if (sess && sess.__error === 'NEWER_SCHEMA') setTimeout(function () { UI.toast('الجلسة المحفوظة من إصدار أحدث ولم تُقرأ حفاظًا عليها', 'warn', 8000); }, 400);
     Q.autosaveArmed = true;
+    if (window.addEventListener) window.addEventListener('load', function () { Pwa.register(); });
     window.addEventListener('scroll', function () { if (Q.hosts.topbar) Q.hosts.topbar.classList.toggle('is-elevated', window.scrollY > 6); }, { passive: true });
     Q.renderShell();
   }
