@@ -827,6 +827,11 @@ table.dt tfoot td{box-shadow:0 -1px 0 var(--line-2)}
 @supports (backdrop-filter:blur(1px)){.busy{backdrop-filter:blur(2px) saturate(1.1)}}
 .busy-card{display:flex; align-items:center; gap:var(--s3); padding:var(--s3) var(--s5); background:var(--surface); border:1px solid var(--line-2); border-radius:var(--r-pill); box-shadow:var(--e3); font-size:var(--t-sm); font-weight:500; color:var(--ink-2)}
 .busy-spin{width:16px; height:16px; border-radius:50%; border:2px solid var(--line-2); border-top-color:var(--accent); animation:spin .7s linear infinite}
+.busy-soft{position:fixed; inset-block-end:var(--s5); inset-inline-start:var(--s5); z-index:210; display:flex; align-items:center; gap:var(--s3); padding:var(--s2) var(--s4); background:var(--surface); border:1px solid var(--line-2); border-radius:var(--r-pill); box-shadow:var(--e2); font-size:var(--t-sm); font-weight:500; color:var(--ink-2); pointer-events:none; animation:fade var(--d2) var(--ease)}
+.busy-soft[hidden]{display:none}
+.vgrid-wrap{overflow:auto}
+.vgrid-wrap table.dt tbody tr.v-pad td{height:auto; padding:0; border:0; background:transparent}
+.view-mode{display:inline-flex; align-items:center; gap:var(--s2)}
 @keyframes spin{to{transform:rotate(360deg)}}
 @page{size:A4; margin:14mm 12mm}
 @media print{

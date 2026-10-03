@@ -314,7 +314,88 @@
   }
   Q.filterBar = filterBar;
 
-  Q.pager = function (current, pages, total, per, onGo, onPer) {
+  Q.viewModeToggle = function (onChange) {
+    var st = S();
+    return UI.segmented({
+      size: 'sm', value: st.ui.viewMode, ariaLabel: 'طريقة عرض الصفوف',
+      options: [{ value: 'pages', label: 'صفحات', title: 'تقسيم الصفوف على صفحات' }, { value: 'scroll', label: 'تمرير', title: 'كل الصفوف في قائمة واحدة متصلة' }],
+      onChange: function (v) { st.ui.viewMode = v; Q.scheduleSave(); onChange(v); }
+    });
+  };
+
+  Q.scrollFoot = function (total, onMode) {
+    var wrap = el('nav', 'pager');
+    wrap.setAttribute('aria-label', 'طريقة العرض');
+    wrap.appendChild(el('div', 'pager-range', Fmt.int(total) + ' صف — تمرير متصل'));
+    wrap.appendChild(Q.viewModeToggle(onMode));
+    return wrap;
+  };
+
+  var V_MAX = 15000000;
+  Q.virtualRows = function (tw, tbody, count, colSpan, rowH, renderRow) {
+    var OVER = 10, h = rowH, start = -1, end = -1, raf = 0, measured = false;
+    var padTop = el('tr', 'v-pad'), padBot = el('tr', 'v-pad');
+    var tdT = el('td'), tdB = el('td');
+    tdT.colSpan = colSpan; tdB.colSpan = colSpan;
+    tdT.setAttribute('aria-hidden', 'true'); tdB.setAttribute('aria-hidden', 'true');
+    padTop.appendChild(tdT); padBot.appendChild(tdB);
+    function headH() { var hd = tw.querySelector('thead'); return hd ? hd.offsetHeight : 0; }
+    function paint(force) {
+      var vh = tw.clientHeight || 600, top = Math.max(0, tw.scrollTop - headH());
+      var full = count * h, total = Math.min(full, V_MAX), scaled = full > V_MAX;
+      var visible = Math.ceil(vh / h) + 1, s, e, first;
+      if (!scaled) {
+        first = Math.floor(top / h);
+      } else {
+        var maxTop = Math.max(1, total - vh);
+        first = Math.floor(Math.min(1, top / maxTop) * Math.max(0, count - visible));
+      }
+      s = Math.max(0, first - OVER);
+      e = Math.min(count, first + visible + OVER);
+      if (!force && s === start && e === end) return;
+      start = s; end = e;
+      var snap = Q.captureFocus();
+      while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+      tbody.appendChild(padTop);
+      for (var i = s; i < e; i++) { var tr = renderRow(i); if (tr) tbody.appendChild(tr); }
+      tbody.appendChild(padBot);
+      var topPad = scaled ? Math.max(0, top - (first - s) * h) : s * h;
+      var botPad = scaled ? Math.max(0, total - topPad - (e - s) * h) : (count - e) * h;
+      tdT.style.height = topPad + 'px';
+      tdB.style.height = botPad + 'px';
+      padTop.hidden = topPad === 0;
+      padBot.hidden = botPad === 0;
+      if (snap && tbody.contains(document.getElementById(snap.id))) Q.restoreFocus(snap);
+      if (!measured && e > s) {
+        measured = true;
+        var real = tbody.children[1] && tbody.children[1].offsetHeight;
+        if (real && Math.abs(real - h) > 1) { h = real; paint(true); }
+      }
+    }
+    function onScroll() {
+      if (raf) return;
+      raf = requestAnimationFrame(function () { raf = 0; if (tw.isConnected) paint(false); });
+    }
+    tw.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    paint(true);
+    return {
+      repaint: function () { paint(true); },
+      range: function () { return [start, end]; },
+      rowHeight: function () { return h; },
+      scrollToIndex: function (i) {
+        var full = count * h, vh = tw.clientHeight || 600;
+        if (full <= V_MAX) tw.scrollTop = i * h;
+        else {
+          var visible = Math.ceil(vh / h) + 1, maxTop = Math.max(1, V_MAX - vh);
+          tw.scrollTop = headH() + Math.round(Math.min(1, i / Math.max(1, count - visible)) * maxTop);
+        }
+        paint(true);
+      }
+    };
+  };
+
+  Q.pager = function (current, pages, total, per, onGo, onPer, onMode) {
     var wrap = el('nav', 'pager');
     wrap.setAttribute('aria-label', 'الصفحات');
     var from = total ? (current - 1) * per + 1 : 0, to = Math.min(total, current * per);
@@ -345,6 +426,7 @@
       options: [25, 50, 100, 250, 500].map(function (n) { return { value: String(n), label: n + ' / صفحة' }; }),
       onChange: function (v) { onPer(Number(v)); }
     }));
+    if (onMode) wrap.appendChild(Q.viewModeToggle(onMode));
     return wrap;
   };
 
@@ -506,6 +588,7 @@
     if (st.screen !== 'allocate') Q.goto('allocate');
     else { renderGrid(); paintReviewNotices(); }
     setTimeout(function () {
+      if (Q.hosts.gridVirtual && st.__gridIds) Q.hosts.gridVirtual.scrollToIndex(st.__gridIds.length - 1);
       var n = document.getElementById('g-' + id + '-name');
       if (n) { n.scrollIntoView({ block: 'center' }); n.focus(); }
     }, 60);
@@ -534,20 +617,21 @@
       paintHeadCheck();
       return;
     }
+    var scroll = st.ui.viewMode === 'scroll';
     var per = st.ui.rowsPerPage;
     var pages = Math.max(1, Math.ceil(ids.length / per));
     if (st.page.grid > pages) st.page.grid = pages;
     var from = (st.page.grid - 1) * per;
-    var slice = ids.slice(from, from + per);
+    var slice = scroll ? null : ids.slice(from, from + per);
     var pm = Q.personById(), rm = Q.rowById();
     var tierNames = Object.keys(st.tiers), poolNames = Object.keys(st.pools);
 
-    var tw = el('div', 'table-wrap h-lg');
+    var tw = el('div', 'table-wrap h-lg' + (scroll ? ' vgrid-wrap' : ''));
     var t = el('table', 'dt dt-edit' + (st.ui.density === 'compact' ? ' compact' : ''));
     var thead = el('thead'), htr = el('tr');
     var hs = el('th', 'sel-col');
     var hcb = UI.checkbox({ size: 'sm', ariaLabel: 'تحديد كل الصفوف الظاهرة (' + ids.length + ')', onChange: function (v) {
-      ids.forEach(function (id) { if (v) st.selection[id] = true; else delete st.selection[id]; });
+      for (var k = 0; k < ids.length; k++) { if (v) st.selection[ids[k]] = true; else delete st.selection[ids[k]]; }
       Array.prototype.forEach.call(tb.querySelectorAll('.sel-col input'), function (c) { c.checked = v; c.closest('tr').classList.toggle('is-selected', v); });
       paintSelBar();
     } });
@@ -565,9 +649,10 @@
     thead.appendChild(htr);
     t.appendChild(thead);
     var tb = el('tbody');
-    slice.forEach(function (id) {
+    function buildRow(id) {
+      if (scroll) { pm = Q.personById(); rm = Q.rowById(); }
       var p = pm[id];
-      if (!p) return;
+      if (!p) return null;
       var r = rm[id];
       var tr = el('tr');
       tr.dataset.id = String(id);
@@ -591,19 +676,31 @@
       var act = el('td', 'act-col');
       act.appendChild(UI.iconBtn('eye', 'كيف حُسب؟', function () { Q.openPerson(id); }, 'sm'));
       tr.appendChild(act);
-      tb.appendChild(tr);
-    });
+      return tr;
+    }
     t.appendChild(tb);
     tw.appendChild(t);
     body.appendChild(tw);
+    function onMode() { st.page.grid = 1; st.__gridScrollTop = 0; renderGridBody(); }
+    if (scroll) {
+      tw.style.height = 'min(72vh,720px)';
+      var keepTop = prevWrap && prevWrap.classList.contains('vgrid-wrap') ? prevWrap.scrollTop : (st.__gridScrollTop || 0);
+      tw.scrollTop = keepTop;
+      tw.addEventListener('scroll', function () { st.__gridScrollTop = tw.scrollTop; }, { passive: true });
+      Q.hosts.gridVirtual = Q.virtualRows(tw, tb, ids.length, GRID_FIELDS.length + 4, st.ui.density === 'compact' ? 37 : 45, function (i) { return buildRow(ids[i]); });
+      body.appendChild(Q.scrollFoot(ids.length, onMode));
+    } else {
+      Q.hosts.gridVirtual = null;
+      slice.forEach(function (id) { var tr = buildRow(id); if (tr) tb.appendChild(tr); });
+      if (pages > 1 || ids.length > 25) body.appendChild(Q.pager(st.page.grid, pages, ids.length, per, function (pg) {
+        st.page.grid = pg;
+        renderGridBody();
+        var w = body.querySelector('.table-wrap');
+        if (w) w.scrollTop = 0;
+        body.scrollIntoView({ block: 'start', behavior: UI.reduceMotion() ? 'auto' : 'smooth' });
+      }, function (n) { st.ui.rowsPerPage = n; st.page.grid = 1; Q.scheduleSave(); renderGridBody(); }, onMode));
+    }
     tw.scrollLeft = sl;
-    if (pages > 1 || ids.length > 25) body.appendChild(Q.pager(st.page.grid, pages, ids.length, per, function (pg) {
-      st.page.grid = pg;
-      renderGridBody();
-      var w = body.querySelector('.table-wrap');
-      if (w) w.scrollTop = 0;
-      body.scrollIntoView({ block: 'start', behavior: UI.reduceMotion() ? 'auto' : 'smooth' });
-    }, function (n) { st.ui.rowsPerPage = n; st.page.grid = 1; Q.scheduleSave(); renderGridBody(); }));
     paintHeadCheck();
     Q.restoreFocus(snap);
   }
@@ -636,6 +733,15 @@
     var all = Array.prototype.slice.call(Q.hosts.gridBody.querySelectorAll('td[data-key="' + key + '"] input'));
     var n = all[all.indexOf(from) + dir];
     if (n) { n.focus(); if (n.select) n.select(); }
+    if (n && Q.hosts.gridVirtual) {
+      var w = Q.hosts.gridBody.querySelector('.vgrid-wrap'), tr = n.closest('tr');
+      if (w && tr) {
+        var wr = w.getBoundingClientRect(), r = tr.getBoundingClientRect(), head = w.querySelector('thead');
+        var hh = head ? head.offsetHeight : 0;
+        if (r.bottom > wr.bottom) w.scrollTop += r.bottom - wr.bottom;
+        else if (r.top < wr.top + hh) w.scrollTop -= wr.top + hh - r.top;
+      }
+    }
   }
 
   function gridCell(id, f, tierNames, poolNames) {

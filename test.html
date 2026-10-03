@@ -36,7 +36,44 @@ document.querySelector('iframe').addEventListener('load', async function () {
       if (list.scrollWidth > list.clientWidth + 1) stepperFits = false;
     }
     frame.hidden = true;
-    var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText, stepperFits: stepperFits };
+
+    var people = win.DemoData.people(60000, 7);
+    var st0 = win.App.internals.getState();
+    var input = { people: people, tiers: st0.tiers, pools: st0.pools, periodDays: st0.periodDays, options: st0.options };
+    var direct = win.Engine.runPipeline(input);
+    var workerOk = false, workerMs = 0;
+    if (win.EngineWorker.supported()) {
+      var tw0 = performance.now();
+      var viaWorker = await win.EngineWorker.run(input);
+      workerMs = Math.round(performance.now() - tw0);
+      workerOk = viaWorker.ok && viaWorker.totals.net === direct.totals.net && viaWorker.cols.net.length === direct.cols.net.length && viaWorker.people[12345].netPiastres === direct.people[12345].netPiastres;
+    }
+
+    var streamOk = false, streamDetail = '';
+    try {
+      var n = 3000;
+      var out = await win.XlsxStream.write([
+        { name: 'تفصيل', header: ['#', 'الاسم', 'الصافي', 'نسبة'], count: n, rowAt: function (k) { return [k + 1, 'اسم <' + k + '> & "x"', (k * 37) / 100, k / n]; }, tail: [['الإجمالي', '', 1, '']], opts: { formats: { 2: '#,##0.00', 3: '0.00%' } } },
+        { name: 'ملخص', rows: [['البيان', 'القيمة'], ['عدد', n]], opts: { autofilter: false } }
+      ], { title: 'test' });
+      var buf = new Uint8Array(await out.blob.arrayBuffer());
+      var wb = win.XLSX.read(buf, { type: 'array', cellNF: true });
+      var aoa = win.XLSX.utils.sheet_to_json(wb.Sheets['تفصيل'], { header: 1 });
+      var cell = wb.Sheets['تفصيل']['C3'];
+      var checks = [wb.SheetNames.join('|') === 'تفصيل|ملخص', aoa.length === n + 2, aoa[5] && aoa[5][1] === 'اسم <4> & "x"', aoa[n + 1] && aoa[n + 1][0] === 'الإجمالي', !!cell && cell.z === '#,##0.00'];
+      streamOk = checks.every(Boolean);
+      streamDetail = out.blob.size + 'B ' + (out.compressed ? 'deflate' : 'store') + ' ' + checks.map(function (c) { return c ? 1 : 0; }).join('') + ' z=' + (cell && cell.z) + ' rows=' + aoa.length;
+    } catch (e) { streamDetail = String(e); }
+
+    var st = win.App.internals.getState();
+    st.ui.viewMode = 'scroll';
+    find('.step-pill', 'المراجعة').click();
+    await wait();
+    var vRows = win.document.querySelectorAll('.vgrid-wrap tbody tr:not(.v-pad)').length;
+    var virtualOk = !!win.document.querySelector('.vgrid-wrap') && vRows > 0 && vRows < 80;
+    st.ui.viewMode = 'pages';
+
+    var integration = { demoLoaded: demoLoaded, protectedReplacement: protectedReplacement, numericText: numericText, stepperFits: stepperFits, workerOk: workerOk, workerMs: workerMs, streamOk: streamOk, streamDetail: streamDetail, virtualOk: virtualOk, offlineXlsx: !!win.XLSX && !win.__sheetJsLocalFailed };
     document.getElementById('results').textContent = (results.length - failed.length) + '/' + results.length + ' ناجح\n' + JSON.stringify(integration);
     console.log('QISMA_TESTS ' + JSON.stringify({ total: results.length, failed: failed, integration: integration }));
     console.log('QISMA_PERF ' + JSON.stringify(results.filter(function (r) { return /^(S2|S3|T11|T22)/.test(r.name); }).map(function (r) { return r.name.slice(0, 3) + ': ' + r.detail; })));

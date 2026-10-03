@@ -144,30 +144,52 @@ var Q = (function () {
   }
   Q.scheduleSave = scheduleSave;
 
-  var recomputeTimer = null;
+  var recomputeTimer = null, computeGen = 0;
+  function engineInput(st) { return { people: st.people, tiers: st.tiers, pools: st.pools, periodDays: st.periodDays, options: st.options }; }
   function recompute() {
     var st = S();
+    computeGen++;
+    st.__computing = false;
     st.__recomputeCount = (st.__recomputeCount || 0) + 1;
-    st.result = Engine.runPipeline({ people: st.people, tiers: st.tiers, pools: st.pools, periodDays: st.periodDays, options: st.options });
+    st.result = Engine.runPipeline(engineInput(st));
     if (st.__app) scheduleSave();
     return st.result;
   }
+  function useWorker(st) { return st.__app && st.people.length >= EngineWorker.THRESHOLD && EngineWorker.supported(); }
+  function recomputeAsync(text, after) {
+    var st = S();
+    if (!useWorker(st)) { recompute(); if (after) after(); return Promise.resolve(st.result); }
+    var my = ++computeGen, input = engineInput(st), t0 = performance.now();
+    st.__computing = true;
+    Busy.softShow(text || ('جارٍ حساب ' + Fmt.int(st.people.length) + ' صف في الخلفية…'));
+    return EngineWorker.run(input).catch(function () { return Engine.runPipeline(input); }).then(function (res) {
+      Busy.softHide();
+      if (my !== computeGen || Q.state !== st) return null;
+      st.__computing = false;
+      st.__recomputeCount = (st.__recomputeCount || 0) + 1;
+      st.result = res;
+      st.__lastComputeMs = performance.now() - t0;
+      scheduleSave();
+      if (after) after();
+      return res;
+    }, function (err) {
+      Busy.softHide();
+      if (my === computeGen) st.__computing = false;
+      throw err;
+    });
+  }
+  Q.recomputeAsync = recomputeAsync;
   function recomputeDebounced(after, delay) {
     if (recomputeTimer) clearTimeout(recomputeTimer);
     var n = S().people.length;
     var d = delay == null ? (n > 200000 ? 650 : (n > 30000 ? 320 : 140)) : delay;
-    recomputeTimer = setTimeout(function () { recomputeTimer = null; recompute(); if (after) after(); }, d);
+    recomputeTimer = setTimeout(function () { recomputeTimer = null; recomputeAsync(null, after); }, d);
   }
-  function recomputeBusy(text, after) {
-    var n = S().people.length;
-    if (n < 30000) { recompute(); if (after) after(); return; }
-    Busy.run(text || ('جارٍ حساب ' + Fmt.int(n) + ' صف…'), function () { recompute(); if (after) after(); });
-  }
+  function recomputeBusy(text, after) { return recomputeAsync(text, after); }
   Q.recomputeBusy = recomputeBusy;
   function recomputeNow(after) {
     if (recomputeTimer) { clearTimeout(recomputeTimer); recomputeTimer = null; }
-    recompute();
-    if (after) after();
+    return recomputeAsync(null, after);
   }
   Q.recompute = recompute;
   Q.recomputeDebounced = recomputeDebounced;
@@ -1020,7 +1042,7 @@ var Q = (function () {
     wrap.appendChild(grid);
 
     if (!Exporter.available()) {
-      var n = UI.notice({ tone: 'warn', title: 'محرك Excel غير متاح الآن', text: 'يمكنك استيراد CSV أو اللصق من Excel وتصدير CSV. لقراءة ملفات Excel وكتابتها اتصل بالإنترنت وأعد تحميل الصفحة مرة واحدة.' });
+      var n = UI.notice({ tone: 'warn', title: 'محرك Excel غير متاح الآن', text: 'تعذّر تحميل الملف المحلي vendor/xlsx.full.min.js. يمكنك استيراد CSV أو اللصق من Excel، والتصدير الكبير يعمل بالكتابة المتدفقة. تأكد من وجود الملف ثم أعد تحميل الصفحة.' });
       n.classList.add('mt4');
       wrap.appendChild(n);
     }
@@ -1112,7 +1134,8 @@ var Q = (function () {
   function loadDemo() { guardReplace(loadDemoConfirmed, 'البيانات التجريبية'); }
   function loadStress(count) {
     guardReplace(function () {
-      Busy.run('جارٍ توليد ' + Fmt.int(count) + ' صف وحسابها…', function () {
+      var t0;
+      Busy.run('جارٍ توليد ' + Fmt.int(count) + ' صف…', function () {
         var st = S();
         st.people = DemoData.people(count, 20260807);
         st.penaltyScale = 'fraction';
@@ -1123,12 +1146,14 @@ var Q = (function () {
         st.sheetName = ''; st.workbook = null;
         st.filters = emptyFilters(); st.sort = { key: null, dir: null };
         st.__restore = null;
-        var t0 = performance.now();
-        recompute();
-        return performance.now() - t0;
-      }).then(function (ms) {
+        st.result = null;
+        t0 = performance.now();
+      }).then(function () {
+        return recomputeAsync('جارٍ حساب ' + Fmt.int(count) + ' صف في الخلفية…');
+      }).then(function () {
+        var ms = performance.now() - t0;
         goto('allocate');
-        UI.toast('حُسب ' + Fmt.int(count) + ' صف في ' + (ms / 1000).toFixed(2) + ' ث', 'ok');
+        UI.toast('حُسب ' + Fmt.int(count) + ' صف في ' + (ms / 1000).toFixed(2) + ' ث' + (useWorker(S()) ? ' (في الخلفية)' : ''), 'ok');
       });
     }, 'بيانات اختبار الحمل');
   }
@@ -1184,7 +1209,7 @@ var Q = (function () {
   function readFile(file) {
     var isText = /\.(csv|tsv|txt)$/i.test(file.name) || /^text\//.test(file.type);
     if (!isText && !Exporter.available()) {
-      UI.toast('محرك Excel غير محمّل (يحتاج اتصالًا بالإنترنت مرة واحدة). احفظ الملف كـ CSV أو الصقه من Excel.', 'danger');
+      UI.toast('محرك Excel غير محمّل (الملف المحلي vendor/xlsx.full.min.js مفقود). احفظ الملف كـ CSV أو الصقه من Excel.', 'danger');
       return;
     }
     var reader = new FileReader();

@@ -573,6 +573,59 @@ var SelfTest = (function () {
       record('S4 — التخزين العمودي يعود بلا فقد، وقارئ CSV السريع دقيق', same && csvOk, JSON.stringify(csv));
     })();
 
+    (function W1() {
+      var r = rng(91), people = randomPeople(r, 400);
+      people[3].pinnedPool = 'التوصيل'; people[9].overrideValue = 4100; people[11].manualFactor = 1.3;
+      var st = baseState(people, { allocation: 'split', capNet: 700 });
+      var direct = Engine.runPipeline(st);
+      var packed = Engine.packPeople(people);
+      var back = Engine.unpackPeople(packed.cols);
+      var viaPack = Engine.runPipeline({ people: back, tiers: st.tiers, pools: st.pools, periodDays: st.periodDays, options: st.options });
+      var d = Engine.dehydrate(viaPack);
+      var hyd = Engine.hydrate(d.res, { people: people, tiers: st.tiers, periodDays: st.periodDays });
+      var ok = direct.ok && hyd.ok && hyd.cols && hyd.totals.net === direct.totals.net && hyd.people.length === direct.people.length;
+      for (var i = 0; ok && i < people.length; i++) {
+        var a = direct.people[i], b = hyd.people[i];
+        if (a.netPiastres !== b.netPiastres || a.taxPiastres !== b.taxPiastres || a.pools.join() !== b.pools.join() || JSON.stringify(a.breakdown) !== JSON.stringify(b.breakdown)) ok = false;
+      }
+      record('W1 — نقل الحساب عبر العامل (تعبئة ← حساب ← ترطيب) مطابق بالقرش', ok, ok ? people.length + ' صف، ' + d.transfer.length + ' مخزن منقول' : 'اختلاف');
+    })();
+
+    (function W2() {
+      var src = String(EngineFactory);
+      var selfContained = src.indexOf('Fmt.') === -1 && src.indexOf('UI.') === -1 && src.indexOf('document') === -1 && src.indexOf('window') === -1;
+      record('W2 — المحرك مستقل تمامًا ويمكن تشغيله داخل Web Worker', selfContained && typeof EngineWorker.runAuto === 'function', EngineWorker.supported() ? 'العامل مدعوم' : 'العامل غير مدعوم — حساب مباشر');
+    })();
+
+    (function V1() {
+      var u1 = Model.ui({ viewMode: 'scroll' }), u2 = Model.ui({ viewMode: 'x' });
+      var host = document.createElement('div');
+      host.style.cssText = 'position:absolute;left:-9999px;top:0;width:600px';
+      var tw = document.createElement('div');
+      tw.style.cssText = 'height:300px;overflow:auto';
+      var t = document.createElement('table'), tb = document.createElement('tbody');
+      t.appendChild(tb); tw.appendChild(t); host.appendChild(tw); document.body.appendChild(host);
+      var built = 0;
+      var v = Q.virtualRows(tw, tb, 1000000, 1, 30, function (i) { built++; var tr = document.createElement('tr'); var td = document.createElement('td'); td.style.height = '30px'; td.style.padding = '0'; td.textContent = 'r' + i; tr.appendChild(td); return tr; });
+      var firstCount = tb.querySelectorAll('tr:not(.v-pad)').length;
+      var laidOut = tw.clientHeight > 0;
+      v.scrollToIndex(500000);
+      var range = v.range(), mid = tb.querySelector('tr:not(.v-pad) td');
+      var bounded = tw.scrollHeight <= 15000000 + 2000;
+      host.remove();
+      var moved = laidOut ? range[0] > 1000 : true;
+      record('V1 — التمرير الافتراضي يرسم نافذة صغيرة من مليون صف', u1.viewMode === 'scroll' && u2.viewMode === 'pages' && firstCount > 0 && firstCount < 80 && moved && !!mid && bounded && built < 400, 'صفوف مرسومة ' + firstCount + '، النطاق ' + range[0] + '–' + range[1] + (laidOut ? '' : ' (بلا تخطيط مرئي)'));
+    })();
+
+    (function X1() {
+      var crc = XlsxStream.crc32(new TextEncoder().encode('123456789')) === 0xCBF43926;
+      var specs = XlsxStream._normalize([{ name: 'كبير', header: ['a'], count: 2500000, rowAt: function () { return [1]; }, tail: [['t']] }, { name: 'كبير', rows: [['x'], [1]] }]);
+      var split = specs.length === 4 && specs[0].to - specs[0].from === XlsxStream.MAX_ROWS - 2 && specs[2].tail.length === 1 && specs[0].tail.length === 0;
+      var names = specs.map(function (s) { return s.name; });
+      var unique = names.length === new Set(names.map(function (x) { return x.toLowerCase(); })).size;
+      record('X1 — كاتب XLSX المتدفق: CRC صحيح وتقسيم تلقائي فوق 1,048,576 صف', crc && split && unique, names.join(' | '));
+    })();
+
     return results;
   }
 

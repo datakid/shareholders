@@ -1,4 +1,4 @@
-var Engine = (function () {
+function EngineFactory() {
   'use strict';
 
   var ENGINE_VERSION = 5;
@@ -657,6 +657,115 @@ var Engine = (function () {
     });
   }
 
+  function attach(res, cols, src) {
+    var n = cols.n, P = cols.poolNames.length, poolNames = cols.poolNames, split = cols.split;
+    var G = cols.gross, T = cols.tax, NT = cols.net, poolCol = cols.pool, dist = cols.dist, weight = cols.weight;
+    var mG = cols.mG, mT = cols.mT, mN = cols.mN, mC = cols.mC, mH = cols.mH, cappedDist = cols.cappedDist;
+    var o = res.options, poolResults = res.poolResults;
+    function partsAt(i2) {
+      var pc = poolCol[i2];
+      if (pc === -1) return [];
+      if (!split) return [{ pool: poolNames[pc], grossPiastres: G[i2], taxPiastres: T[i2], netPiastres: NT[i2], capped: !!cappedDist[i2] }];
+      var out = [];
+      for (var k3 = 0; k3 < P; k3++) {
+        var c3 = i2 * P + k3;
+        if (mH[c3]) out.push({ pool: poolNames[k3], grossPiastres: mG[c3], taxPiastres: mT[c3], netPiastres: mN[c3], capped: !!mC[c3] });
+      }
+      return out;
+    }
+    function poolsAt(i2) {
+      var pc = poolCol[i2];
+      if (pc === -1) return [];
+      if (pc >= 0) return [poolNames[pc]];
+      var out = [];
+      for (var k4 = 0; k4 < P; k4++) if (mH[i2 * P + k4]) out.push(poolNames[k4]);
+      return out;
+    }
+    function personAt(i2) {
+      var parts = partsAt(i2), single = parts.length === 1 ? parts[0].pool : null, dw = dist[i2];
+      var ppl = src.people;
+      var b = ppl && ppl[i2] ? weightBreakdown(ppl[i2], src.tiers || {}, src.periodDays, o) : null;
+      return {
+        id: cols.ids[i2], pool: single, pools: parts.map(function (x) { return x.pool; }), multi: parts.length > 1, parts: parts,
+        weight: weight[i2], distWeight: dw, capped: !!cols.capped[i2],
+        shareOfPoolWeight: single && poolResults[single].actualWeight > 0 ? dw / poolResults[single].actualWeight : 0,
+        grossPiastres: G[i2], taxPiastres: T[i2], netPiastres: NT[i2],
+        idealNetEGP: dw > 0 ? cols.kPi * dw / 100 : 0,
+        unresolvedTier: !cols.excluded[i2] && !!cols.unresolved[i2], excluded: !!cols.excluded[i2], breakdown: b
+      };
+    }
+    cols.partsAt = partsAt;
+    cols.poolsAt = poolsAt;
+    cols.personAt = personAt;
+    Object.defineProperty(res, 'cols', { value: cols, enumerable: false, configurable: true });
+    lazy(res, 'people', true, function () { var arr = new Array(n); for (var z = 0; z < n; z++) arr[z] = personAt(z); return arr; });
+    lazy(res, 'assignment', false, function () { var a = {}; for (var z = 0; z < n; z++) if (poolCol[z] >= 0) a[cols.ids[z]] = poolNames[poolCol[z]]; return a; });
+    return res;
+  }
+
+  var COL_KEYS = ['gross', 'tax', 'net', 'weight', 'dist', 'pool', 'capped', 'excluded', 'unresolved', 'warnFlags', 'mG', 'mT', 'mN', 'mC', 'mH', 'cappedDist'];
+  function dehydrate(res) {
+    if (!res || !res.ok || !res.cols) return { res: res, transfer: [] };
+    var c = res.cols, plain = {}, cols = { n: c.n, ids: c.ids, poolNames: c.poolNames, split: c.split, kPi: c.kPi }, transfer = [];
+    Object.keys(res).forEach(function (k) { if (k !== 'people' && k !== 'assignment') plain[k] = res[k]; });
+    COL_KEYS.forEach(function (k) { var a = c[k]; cols[k] = a; if (a && a.buffer && transfer.indexOf(a.buffer) === -1) transfer.push(a.buffer); });
+    plain.__cols = cols;
+    return { res: plain, transfer: transfer };
+  }
+  function hydrate(plain, src) {
+    if (!plain || !plain.ok || !plain.__cols) return plain;
+    var cols = plain.__cols;
+    delete plain.__cols;
+    return attach(plain, cols, src || {});
+  }
+
+  var PSTR = ['code', 'name', 'job', 'dept', 'notes'], PNUM = ['daysWorked', 'penaltyRate', 'manualFactor', 'overrideValue'];
+  function packPeople(list) {
+    var n = list.length, i, out = { kind: 'qisma.cols', v: 1, n: n }, transfer = [];
+    var seq = true;
+    for (i = 0; i < n; i++) if (list[i].id !== i + 1) { seq = false; break; }
+    out.id = null;
+    if (!seq) { out.id = new Array(n); for (i = 0; i < n; i++) out.id[i] = list[i].id; }
+    out.name = new Array(n);
+    for (i = 0; i < n; i++) out.name[i] = list[i].name || '';
+    function dict(key) {
+      var map = new Map(), keys = [], idx = new Uint32Array(n);
+      for (var j = 0; j < n; j++) {
+        var v = list[j][key]; if (v == null) v = '';
+        var k = map.get(v);
+        if (k === undefined) { k = keys.length; map.set(v, k); keys.push(v); }
+        idx[j] = k;
+      }
+      transfer.push(idx.buffer);
+      return { keys: keys, idx: idx };
+    }
+    out.tier = dict('tier');
+    out.pinnedPool = dict('pinnedPool');
+    PNUM.forEach(function (k) {
+      var a = new Float64Array(n);
+      for (var j = 0; j < n; j++) { var v = list[j][k]; a[j] = v == null ? NaN : v; }
+      out[k] = a; transfer.push(a.buffer);
+    });
+    var ex = new Uint8Array(n);
+    for (i = 0; i < n; i++) if (list[i].excluded) ex[i] = 1;
+    out.excluded = ex; transfer.push(ex.buffer);
+    return { cols: out, transfer: transfer };
+  }
+  function unpackPeople(c) {
+    var n = c.n, out = new Array(n);
+    var tk = c.tier.keys, ti = c.tier.idx, pk = c.pinnedPool.keys, pi = c.pinnedPool.idx;
+    function num(a, j) { var v = a[j]; return v !== v ? null : v; }
+    for (var i = 0; i < n; i++) {
+      var pin = pk[pi[i]];
+      out[i] = {
+        id: c.id ? c.id[i] : i + 1, name: c.name[i], tier: tk[ti[i]],
+        daysWorked: num(c.daysWorked, i), penaltyRate: num(c.penaltyRate, i), manualFactor: num(c.manualFactor, i), overrideValue: num(c.overrideValue, i),
+        pinnedPool: pin === '' ? null : pin, excluded: !!c.excluded[i]
+      };
+    }
+    return out;
+  }
+
   function runPipeline(state) {
     state = state || {};
     var t0 = now();
@@ -828,40 +937,6 @@ var Engine = (function () {
         capped: cappedAny, excluded: excludedF, unresolved: unresolvedF, warnFlags: scan.flags, kPi: kPi,
         mG: mG, mT: mT, mN: mN, mC: mC, mH: mH, cappedDist: cappedDist
       };
-      function partsAt(i2) {
-        var pc = poolCol[i2];
-        if (pc === -1) return [];
-        if (!split) return [{ pool: poolNames[pc], grossPiastres: G[i2], taxPiastres: T[i2], netPiastres: NT[i2], capped: !!cappedDist[i2] }];
-        var out = [];
-        for (var k3 = 0; k3 < P; k3++) {
-          var c3 = i2 * P + k3;
-          if (mH[c3]) out.push({ pool: poolNames[k3], grossPiastres: mG[c3], taxPiastres: mT[c3], netPiastres: mN[c3], capped: !!mC[c3] });
-        }
-        return out;
-      }
-      function poolsAt(i2) {
-        var pc = poolCol[i2];
-        if (pc === -1) return [];
-        if (pc >= 0) return [poolNames[pc]];
-        var out = [];
-        for (var k4 = 0; k4 < P; k4++) if (mH[i2 * P + k4]) out.push(poolNames[k4]);
-        return out;
-      }
-      cols.partsAt = partsAt;
-      cols.poolsAt = poolsAt;
-      function personAt(i2) {
-        var parts = partsAt(i2), single = parts.length === 1 ? parts[0].pool : null, dw = dist[i2];
-        var b = weightBreakdown(people[i2], tiers, periodDays, o);
-        return {
-          id: ids[i2], pool: single, pools: parts.map(function (x) { return x.pool; }), multi: parts.length > 1, parts: parts,
-          weight: weight[i2], distWeight: dw, capped: !!cappedAny[i2],
-          shareOfPoolWeight: single && poolResults[single].actualWeight > 0 ? dw / poolResults[single].actualWeight : 0,
-          grossPiastres: G[i2], taxPiastres: T[i2], netPiastres: NT[i2],
-          idealNetEGP: dw > 0 ? kPi * dw / 100 : 0,
-          unresolvedTier: !excludedF[i2] && !!unresolvedF[i2], excluded: !!excludedF[i2], breakdown: b
-        };
-      }
-      cols.personAt = personAt;
 
       var res = {
         ok: true,
@@ -883,9 +958,7 @@ var Engine = (function () {
         totals: tot,
         meta: { timingMs: 0, converged: assignMeta.converged, passes: assignMeta.passes, rows: n }
       };
-      Object.defineProperty(res, 'cols', { value: cols, enumerable: false, configurable: true });
-      lazy(res, 'people', true, function () { var arr = new Array(n); for (var z = 0; z < n; z++) arr[z] = personAt(z); return arr; });
-      lazy(res, 'assignment', false, function () { var a = {}; for (var z = 0; z < n; z++) if (poolCol[z] >= 0) a[ids[z]] = poolNames[poolCol[z]]; return a; });
+      attach(res, cols, { people: people, tiers: tiers, periodDays: periodDays });
       res.meta.timingMs = now() - t0;
       return res;
     } catch (e) {
@@ -921,9 +994,85 @@ var Engine = (function () {
     collectRowWarnings: collectRowWarnings,
     normalizePinnedPool: normalizePinnedPool,
     runPipeline: runPipeline,
+    dehydrate: dehydrate,
+    hydrate: hydrate,
+    packPeople: packPeople,
+    unpackPeople: unpackPeople,
     clamp: clamp,
     compareIds: compareIds,
     hasOwn: hasOwn,
     isNum: isNum
   };
+}
+var Engine = EngineFactory();
+
+var EngineWorker = (function () {
+  'use strict';
+  var THRESHOLD = 30000;
+  var worker = null, failed = false, seq = 0, pending = Object.create(null), url = null;
+  function body() {
+    self.onmessage = function (e) {
+      var m = e.data, out;
+      try {
+        var people = Engine.unpackPeople(m.people);
+        var res = Engine.runPipeline({ people: people, tiers: m.tiers, pools: m.pools, periodDays: m.periodDays, options: m.options });
+        var d = Engine.dehydrate(res);
+        out = { id: m.id, ok: true, res: d.res };
+        self.postMessage(out, d.transfer);
+      } catch (err) {
+        self.postMessage({ id: m.id, ok: false, error: String(err && err.message || err) });
+      }
+    };
+  }
+  function supported() {
+    return !failed && typeof Worker !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && !!URL.createObjectURL;
+  }
+  function ensure() {
+    if (worker) return worker;
+    if (!supported()) return null;
+    try {
+      var src = EngineFactory.toString() + '\nvar Engine = EngineFactory();\n(' + body.toString() + ')();';
+      url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      worker = new Worker(url);
+      worker.onmessage = function (e) {
+        var m = e.data, p = pending[m.id];
+        if (!p) return;
+        delete pending[m.id];
+        if (m.ok) p.resolve(m.res); else p.reject(new Error(m.error));
+      };
+      worker.onerror = function (e) {
+        failed = true;
+        var keys = Object.keys(pending);
+        keys.forEach(function (k) { pending[k].reject(new Error((e && e.message) || 'worker-error')); delete pending[k]; });
+        try { worker.terminate(); } catch (x) {}
+        worker = null;
+        if (e && e.preventDefault) e.preventDefault();
+      };
+    } catch (err) {
+      failed = true;
+      worker = null;
+    }
+    return worker;
+  }
+  function run(state) {
+    var w = ensure();
+    if (!w) return Promise.reject(new Error('no-worker'));
+    var id = ++seq;
+    var packed = Engine.packPeople(state.people || []);
+    return new Promise(function (resolve, reject) {
+      pending[id] = { resolve: resolve, reject: reject };
+      try {
+        w.postMessage({ id: id, people: packed.cols, tiers: state.tiers, pools: state.pools, periodDays: state.periodDays, options: state.options }, packed.transfer);
+      } catch (err) { delete pending[id]; reject(err); }
+    }).then(function (plain) {
+      return Engine.hydrate(plain, { people: state.people, tiers: state.tiers, periodDays: state.periodDays });
+    });
+  }
+  function runAuto(state) {
+    var n = (state.people || []).length;
+    if (n < THRESHOLD || !supported()) return Promise.resolve(Engine.runPipeline(state));
+    return run(state).catch(function () { return Engine.runPipeline(state); });
+  }
+  function terminate() { if (worker) { try { worker.terminate(); } catch (e) {} worker = null; } }
+  return { run: run, runAuto: runAuto, supported: supported, terminate: terminate, THRESHOLD: THRESHOLD, busy: function () { return Object.keys(pending).length > 0; } };
 })();

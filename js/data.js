@@ -97,6 +97,7 @@ var Model = (function () {
     return {
       density: u.density === 'compact' ? 'compact' : 'normal',
       rowsPerPage: [25, 50, 100, 250, 500].indexOf(per) !== -1 ? per : 100,
+      viewMode: u.viewMode === 'scroll' ? 'scroll' : 'pages',
       tableDetail: u.tableDetail === 'full' ? 'full' : 'simple',
       theme: u.theme === 'light' || u.theme === 'dark' ? u.theme : 'system',
       motion: u.motion === 'reduced' ? 'reduced' : 'full',
@@ -1006,12 +1007,119 @@ var Exporter = (function () {
     downloadBlob(new Blob(parts, { type: 'text/csv;charset=utf-8' }), safeName(filename));
   }
   var XLSX_ROW_LIMIT = 200000;
+
+  function streamSpecs(state, result, meta, keys) {
+    var want = function (k) { return !keys || keys.indexOf(k) !== -1; };
+    var specs = [], detail = null;
+    function rowsOf() { if (!detail) detail = Reports.detailRows(state, result); return detail; }
+    if (want('exec')) {
+      var exec = Reports.executiveRows(state, result);
+      var rows = [['البيان', 'القيمة']];
+      if (meta && meta.title) rows.push(['العنوان', meta.title]);
+      if (state.period) rows.push(['الفترة', state.period]);
+      var off = rows.length;
+      exec.forEach(function (r) { rows.push([r.label, r.value]); });
+      rows.push([]);
+      rows.push(['التقرير أُنتج في', Fmt.humanTime(meta && meta.at)]);
+      rows.push(['إصدار التطبيق', (meta && meta.version) || APP_VERSION]);
+      rows.push(['نطاق التقرير', 'كل الأشخاص في الملف — لا تتأثر أرقام هذا التقرير بأي بحث أو تصفية على الشاشة']);
+      rows.push(['طريقة الكتابة', 'ملف Excel مكتوب بالتدفق لكبر حجم البيانات']);
+      if (exec.__totals.unresolved > 0) { rows.push([]); rows.push(['تنبيه مسؤولية', 'يوجد ' + exec.__totals.unresolved + ' شخص بدون فئة معروفة. تم استبعادهم من التوزيع ولم يحصلوا على أي مبلغ. راجع ورقة «بدون فئة».']); }
+      specs.push({ key: 'exec', name: 'الملخص التنفيذي', rows: rows, opts: { widths: [40, 24], autofilter: false, cellFmt: function (r, c) { var e = exec[r - off]; return c === 1 && e ? kindFormat(e.kind) : null; } } });
+    }
+    if (want('pools')) {
+      var phdr = ['المجمع', 'الإجمالي المُدخل', 'الإجمالي بعد التقريب', 'نسبة الخصم', 'الخصم', 'الصافي الموزّع', 'غير موزّع', 'عدد الأعضاء', 'نصيب وحدة الوزن', 'الانحراف', 'ملاحظة'];
+      var pbody = Reports.poolRows(state, result).map(function (p) {
+        var notes = [];
+        if (p.zeroBudget) notes.push('بلا مبلغ');
+        if (p.rounded) notes.push('تأثّر بالتقريب');
+        if (p.capped) notes.push(p.capped + ' بلغوا الحد الأقصى');
+        return [p.name, p.gross, p.effectiveGross, p.taxRate, p.tax, p.net, p.retained, p.members, p.kPool == null ? '' : p.kPool, p.deviation == null ? '' : p.deviation, notes.join(' | ')];
+      });
+      specs.push({ key: 'pools', name: 'المجمعات', rows: [phdr].concat(pbody), opts: { formats: { 1: M2, 2: M2, 3: PCT, 4: M2, 5: M2, 6: M2, 7: INT, 8: M4, 9: PCT } } });
+    }
+    if (want('detail')) {
+      var all = rowsOf(), g = 0, t = 0, nt = 0;
+      for (var i = 0; i < all.length; i++) { g += all[i].grossPiastres; t += all[i].taxPiastres; nt += all[i].netPiastres; }
+      var tot = []; for (var z = 0; z < DET_HDR.length; z++) tot.push('');
+      tot[0] = 'الإجمالي'; tot[15] = g / 100; tot[16] = t / 100; tot[17] = nt / 100;
+      specs.push({ key: 'detail', name: 'التفصيل الكامل', header: DET_HDR, count: all.length, rowAt: function (k) { return detRow(all[k]); }, tail: [tot], opts: { formats: DET_FMT, widths: [8, 14, 30, 22, 22, 16, 18, 12, 8, 9, 9, 12, 16, 8, 9, 14, 12, 14, 14, 10, 9, 30, 24] } });
+    }
+    if (want('payroll')) {
+      var src = rowsOf(), idx = new Int32Array(src.length), m = 0, sum = 0;
+      for (var j = 0; j < src.length; j++) if (src[j].netPiastres > 0) { idx[m++] = j; sum += src[j].netPiastres; }
+      specs.push({ key: 'payroll', name: 'كشف الصرف', header: ['م', 'الرقم الوظيفي', 'الاسم', 'القسم', 'الصافي المستحق', 'التوقيع'], count: m,
+        rowAt: function (k) { var r = src[idx[k]]; return [k + 1, r.code, r.name, r.dept, r.net, '']; },
+        tail: [['', '', 'الإجمالي (' + m + ')', '', sum / 100, '']], opts: { formats: { 0: INT, 4: M2 }, widths: [8, 14, 32, 24, 16, 22] } });
+    }
+    if (want('unresolved')) {
+      var un = Reports.unresolvedRows(state, result);
+      if (un.length) specs.push({ key: 'unresolved', name: 'بدون فئة', header: ['#', 'الرقم الوظيفي', 'الاسم', 'القسم', 'الفئة المُدخلة', 'الأيام', 'سبب الاستبعاد', 'ملاحظات', 'قرار المستخدم'], count: un.length,
+        rowAt: function (k) { var r = un[k]; return [r.id, r.code, r.name, r.dept, r.tier, r.days, r.cause, r.notes, '']; }, opts: { formats: { 0: INT, 5: INT } } });
+    }
+    if (want('special')) {
+      var sp = Reports.specialRows(state, result);
+      if (sp.length) specs.push({ key: 'special', name: 'الحالات الخاصة', header: ['#', 'الرقم الوظيفي', 'الاسم', 'القسم', 'الفئة', 'المجمع', 'الوزن', 'الصافي', 'سبب الحالة الخاصة', 'ملاحظات'], count: sp.length,
+        rowAt: function (k) { var r = sp[k]; return [r.id, r.code, r.name, r.dept, r.tier, r.pool, r.weight, r.net, r.reason, r.notes]; }, opts: { formats: { 0: INT, 6: M4, 7: M2 } } });
+    }
+    function group(key, name, first, list) {
+      var hdr = [first, 'العدد', 'المستحقون', 'مستبعدون', 'بدون فئة', 'مجموع الأوزان', 'الإجمالي', 'الخصم', 'الصافي', 'متوسط الصافي'];
+      var body = list.map(function (d) { return [d.key, d.count, d.paid, d.excluded, d.unresolved, d.weight, d.gross, d.tax, d.net, d.avg]; });
+      var tt = ['الإجمالي'];
+      for (var c = 1; c <= 8; c++) tt.push(Math.round(body.reduce(function (s, r) { return s + r[c] * (c >= 6 ? 100 : 1); }, 0)) / (c >= 6 ? 100 : 1));
+      tt.push('');
+      specs.push({ key: key, name: name, rows: [hdr].concat(body).concat([tt]), opts: { formats: { 1: INT, 2: INT, 3: INT, 4: INT, 5: M4, 6: M2, 7: M2, 8: M2, 9: M2 } } });
+    }
+    if (want('dept')) group('dept', 'حسب القسم', 'القسم', Reports.deptRows(state, result));
+    if (want('tier')) group('tier', 'حسب الفئة', 'الفئة', Reports.tierRows(state, result));
+    if (want('warnings')) {
+      var warns = Reports.warningRows(result);
+      if (warns.length) specs.push({ key: 'warnings', name: 'التنبيهات', rows: [['النوع', 'الهدف', 'الرسالة', 'الرمز']].concat(warns.map(function (w) { return [w.kind, w.target, w.message, w.code]; })), opts: { widths: [26, 14, 80, 22] } });
+    }
+    if (want('methodology')) specs.push({ key: 'methodology', name: 'المنهجية', rows: [['البند', 'التفصيل']].concat(Reports.methodologyRows(state, result)), opts: { widths: [28, 110], autofilter: false } });
+    Object.keys(state.pools || {}).forEach(function (poolName, pIx) {
+      if (!want('pool:' + poolName)) return;
+      var c = result.cols, src2 = rowsOf(), pos = [], gs = 0, ts = 0, ns = 0;
+      var P = c.poolNames.length, pj = c.poolNames.indexOf(poolName);
+      if (pj < 0) return;
+      for (var q = 0; q < c.n; q++) {
+        if (c.pool[q] === pj) { pos.push(q); gs += c.gross[q]; ts += c.tax[q]; ns += c.net[q]; }
+        else if (c.pool[q] === -2 && c.mH[q * P + pj]) { pos.push(q); gs += c.mG[q * P + pj]; ts += c.mT[q * P + pj]; ns += c.mN[q * P + pj]; }
+      }
+      if (!pos.length) return;
+      var hdr = ['#', 'الرقم الوظيفي', 'الاسم', 'القسم', 'الفئة', 'الوزن', 'الأيام', 'الجزاء', 'المعامل', 'قيمة مخصصة', 'مثبّت', 'الإجمالي من المجمع', 'الخصم', 'الصافي من المجمع', 'حالة خاصة', 'ملاحظات'];
+      var tail = []; for (var y = 0; y < hdr.length; y++) tail.push('');
+      tail[0] = 'الإجمالي'; tail[11] = gs / 100; tail[12] = ts / 100; tail[13] = ns / 100;
+      specs.push({ key: 'pool:' + poolName, name: poolName, header: hdr, count: pos.length, tail: [tail],
+        rowAt: function (k) {
+          var ix = pos[k], r = src2[ix], gP, tP, nP;
+          if (c.pool[ix] === pj) { gP = c.gross[ix]; tP = c.tax[ix]; nP = c.net[ix]; }
+          else { var cell = ix * P + pj; gP = c.mG[cell]; tP = c.mT[cell]; nP = c.mN[cell]; }
+          return [r.id, r.code, r.name, r.dept, r.tier, r.weight, r.days, r.penalty, r.manual, r.override == null ? '' : r.override, r.pinned ? 'نعم' : '', gP / 100, tP / 100, nP / 100, r.special ? r.reason : '', r.notes];
+        },
+        opts: { formats: { 0: INT, 5: M4, 6: INT, 7: PCT, 8: M4, 9: M2, 11: M2, 12: M2, 13: M2 } } });
+    });
+    return specs;
+  }
+  function streamAoaSpec(name, aoa, opts) {
+    var head = aoa[0] || [], body = aoa.slice(1);
+    return { name: name, header: head, count: body.length, rowAt: function (k) { return body[k]; }, opts: opts || {} };
+  }
+  function writeStream(specs, filename, meta, onProgress) {
+    return XlsxStream.write(specs, { title: (meta && meta.title) || APP_NAME, author: APP_NAME_LATIN + ' ' + APP_VERSION }, onProgress).then(function (out) {
+      downloadBlob(out.blob, safeName(filename));
+      return out;
+    });
+  }
+  function streamAvailable() { return typeof XlsxStream !== 'undefined' && XlsxStream.available(); }
+
   function writeJson(payload, filename) { downloadBlob(new Blob([typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }), safeName(filename)); }
 
   return {
     buildFullReport: buildFullReport, buildSelectedReport: buildSelectedReport, buildViewExport: buildViewExport,
     buildTemplate: buildTemplate, templateRows: templateRows, buildSettingsExport: buildSettingsExport, detailAoa: detailAoa,
     addPoolSheet: addPoolSheet, sheetRegistry: sheetRegistry, write: write, writeCsv: writeCsv, writeJson: writeJson, toCsv: toCsv, XLSX_ROW_LIMIT: XLSX_ROW_LIMIT, downloadBlob: downloadBlob,
+    streamSpecs: streamSpecs, streamAoaSpec: streamAoaSpec, writeStream: writeStream, streamAvailable: streamAvailable, DET_HDR: DET_HDR,
     available: available, sanitizeSheetName: sanitizeSheetName, newWorkbook: newWorkbook, kindFormat: kindFormat, safeName: safeName,
     FORMATS: { M2: M2, M4: M4, PCT: PCT, INT: INT }
   };

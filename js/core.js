@@ -559,7 +559,31 @@ var Busy = (function () {
     });
   }
   function maybe(size, text, fn) { return size > 30000 ? run(text, fn) : Promise.resolve(fn()); }
-  return { show: show, hide: hide, run: run, maybe: maybe, set: function (t) { if (label) label.textContent = t; } };
+  var soft = null, softLabel = null, softDepth = 0, softTimer = null;
+  function softShow(text) {
+    if (!soft) {
+      soft = document.createElement('div');
+      soft.className = 'busy-soft';
+      soft.setAttribute('role', 'status');
+      soft.setAttribute('aria-live', 'polite');
+      soft.hidden = true;
+      var spin = document.createElement('span');
+      spin.className = 'busy-spin';
+      softLabel = document.createElement('span');
+      soft.appendChild(spin);
+      soft.appendChild(softLabel);
+      document.body.appendChild(soft);
+    }
+    softLabel.textContent = text || 'جارٍ الحساب في الخلفية…';
+    softDepth++;
+    clearTimeout(softTimer);
+    softTimer = setTimeout(function () { if (softDepth) soft.hidden = false; }, 150);
+  }
+  function softHide() {
+    softDepth = Math.max(0, softDepth - 1);
+    if (!softDepth && soft) { clearTimeout(softTimer); soft.hidden = true; }
+  }
+  return { show: show, hide: hide, run: run, maybe: maybe, softShow: softShow, softHide: softHide, softActive: function () { return softDepth > 0; }, set: function (t) { if (label) label.textContent = t; } };
 })();
 
 var Store = (function () {

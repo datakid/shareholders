@@ -68,9 +68,11 @@
     var total = Q.viewRows().length;
     if (total > 5000) UI.toast('تُطبع أول 5,000 صف من العرض — للقائمة الكاملة استخدم التصدير', 'warn', 6000);
     st.ui.rowsPerPage = Math.min(5000, Math.max(prevPer, total));
+    st.__printing = true;
     renderTable();
     setTimeout(function () {
       window.print();
+      st.__printing = false;
       st.ui.rowsPerPage = prevPer;
       st.ui.tableDetail = prev;
       renderTable();
@@ -296,14 +298,16 @@
     var snap = Q.captureFocus();
     var prevWrap = host.querySelector('.table-wrap');
     var sl = prevWrap ? prevWrap.scrollLeft : 0;
+    var prevRows = st.__dashRowsShown;
     clearNode(host);
     var rows = Q.viewRows();
     var needle = st.__lastNeedle;
     if (Q.hosts.dashFilter) Q.hosts.dashFilter.setCount(rows.length, Q.rowsCache().length);
+    var scroll = st.ui.viewMode === 'scroll' && !st.__printing;
     var per = st.ui.rowsPerPage;
     var pages = Math.max(1, Math.ceil(rows.length / per));
     if (st.page.dashboard > pages) st.page.dashboard = pages;
-    var slice = rows.slice((st.page.dashboard - 1) * per, st.page.dashboard * per);
+    var slice = scroll ? null : rows.slice((st.page.dashboard - 1) * per, st.page.dashboard * per);
     if (!rows.length) {
       var f = Q.activeFilterList().length;
       host.appendChild(el('div', 'card', UI.emptyState('لا صفوف مطابقة', f ? 'التصفية الحالية لا تطابق أي شخص.' : 'لا يوجد أشخاص.', f ? btn('مسح التصفية', { variant: 'primary', onClick: function () { st.filters = Q.emptyFilters(); Q.renderScreen(); } }) : null, 'search')));
@@ -312,7 +316,7 @@
     var full = st.ui.tableDetail === 'full';
     var cols = Q.COLUMNS.filter(function (c) { return full || !c.detail; });
     var diff = Q.baselineDiff();
-    var tw = el('div', 'table-wrap h-lg');
+    var tw = el('div', 'table-wrap h-lg' + (scroll ? ' vgrid-wrap' : ''));
     var t = el('table', 'dt dt-fixed' + (st.ui.density === 'compact' ? ' compact' : ''));
     var cg = el('colgroup');
     var totalW = 0;
@@ -345,7 +349,7 @@
     thead.appendChild(htr);
     t.appendChild(thead);
     var tb = el('tbody');
-    slice.forEach(function (r) {
+    function buildRow(r) {
       var tr = el('tr');
       var tone = Q.rowTone(r);
       if (tone) tr.className = tone;
@@ -382,8 +386,9 @@
       var act = el('td', 'act-col');
       act.appendChild(UI.iconBtn('eye', 'تفاصيل الحساب', function () { Q.openPerson(r.id); }, 'sm'));
       tr.appendChild(act);
-      tb.appendChild(tr);
-    });
+      return tr;
+    }
+    if (!scroll) slice.forEach(function (r) { tb.appendChild(buildRow(r)); });
     t.appendChild(tb);
     var sums = st.__sumsFor === rows ? st.__sums : null;
     if (!sums) {
@@ -404,14 +409,21 @@
     t.appendChild(tfoot);
     tw.appendChild(t);
     host.appendChild(tw);
-    tw.scrollLeft = sl;
-    if (pages > 1 || rows.length > 25) host.appendChild(Q.pager(st.page.dashboard, pages, rows.length, per, function (p) {
+    function onMode() { st.page.dashboard = 1; renderTable(); }
+    if (scroll) {
+      tw.style.height = 'min(72vh,720px)';
+      if (prevWrap && prevWrap.classList.contains('vgrid-wrap') && prevRows === rows) tw.scrollTop = prevWrap.scrollTop;
+      Q.virtualRows(tw, tb, rows.length, cols.length + (diff ? 2 : 1), st.ui.density === 'compact' ? 37 : 47, function (i) { return buildRow(rows[i]); });
+      host.appendChild(Q.scrollFoot(rows.length, onMode));
+    } else if (pages > 1 || rows.length > 25) host.appendChild(Q.pager(st.page.dashboard, pages, rows.length, per, function (p) {
       st.page.dashboard = p;
       renderTable();
       var w = host.querySelector('.table-wrap');
       if (w) w.scrollTop = 0;
       host.scrollIntoView({ block: 'start', behavior: UI.reduceMotion() ? 'auto' : 'smooth' });
-    }, function (n) { st.ui.rowsPerPage = n; st.page.dashboard = 1; Q.scheduleSave(); renderTable(); }));
+    }, function (n) { st.ui.rowsPerPage = n; st.page.dashboard = 1; Q.scheduleSave(); renderTable(); }, onMode));
+    tw.scrollLeft = sl;
+    st.__dashRowsShown = rows;
     Q.restoreFocus(snap);
   }
   Q.renderTable = renderTable;
@@ -423,14 +435,32 @@
   function meta() { var st = S(); return { at: Date.now(), version: APP_VERSION, title: st.title, period: st.period }; }
   function needOk() { if (!Q.ok()) { UI.toast('صحّح أخطاء الحساب قبل التصدير', 'warn'); return false; } return true; }
   function tooBig() { return S().people.length > Exporter.XLSX_ROW_LIMIT; }
-  function run(label, fn, csvRows) {
+  function runStream(label, specsFn, filename, csvRows) {
+    var t0 = performance.now();
+    Busy.run('جارٍ تجهيز ' + label + '…', specsFn).then(function (specs) {
+      Busy.show('جارٍ كتابة ' + label + ' بالتدفق… 0%');
+      return Exporter.writeStream(specs, filename, meta(), function (p) { Busy.set('جارٍ كتابة ' + label + ' بالتدفق… ' + Math.round(p * 100) + '%'); })
+        .then(function (out) { Busy.hide(); return out; }, function (e) { Busy.hide(); throw e; });
+    }).then(function (out) {
+      UI.toast('تم تنزيل ' + label + ' — ' + Fmt.int(out.rows) + ' صف في ' + Fmt.int(out.sheets) + ' ورقة (' + Fmt.kb(out.blob.size) + '، ' + ((performance.now() - t0) / 1000).toFixed(1) + ' ث)', 'ok', 6500);
+    }, function (e) {
+      if (window.console) console.error(e);
+      if (!csvRows) { UI.toast('تعذّر إنشاء الملف: ' + (e && e.message || e), 'danger'); return; }
+      Busy.run('جارٍ إنشاء ' + label + '…', function () { Exporter.writeCsv(csvRows(), filename.replace(/\.xlsx$/, '.csv')); })
+        .then(function () { UI.toast('تعذّرت الكتابة المتدفقة — نُزّل ' + label + ' بصيغة CSV', 'warn', 6500); });
+    });
+  }
+  Q.runStream = runStream;
+  function run(label, fn, csvRows, stream) {
+    if (stream && tooBig() && Exporter.streamAvailable()) { runStream(label, stream.specs, stream.filename, csvRows); return; }
     if (csvRows && tooBig()) {
       Busy.run('جارٍ إنشاء ' + label + '…', function () { Exporter.writeCsv(csvRows(), baseName(label) + '.csv'); })
         .then(function () { UI.toast('نُزّل ' + label + ' بصيغة CSV — الحجم أكبر من أن يُكتب كملف Excel في المتصفح', 'ok', 6000); }, function (e) { UI.toast('تعذّر التصدير: ' + (e && e.message || e), 'danger'); });
       return;
     }
     if (!Exporter.available()) {
-      if (!csvRows) { UI.toast('محرك Excel غير محمّل — اتصل بالإنترنت وأعد التحميل', 'danger'); return; }
+      if (stream && Exporter.streamAvailable()) { runStream(label, stream.specs, stream.filename, csvRows); return; }
+      if (!csvRows) { UI.toast('محرك Excel غير محمّل — تأكد من وجود vendor/xlsx.full.min.js وأعد التحميل', 'danger'); return; }
       try { Exporter.writeCsv(csvRows(), baseName(label) + '.csv'); UI.toast('محرك Excel غير محمّل — نُزّل ' + label + ' بصيغة CSV', 'warn', 6000); }
       catch (e) { UI.toast('تعذّر التصدير: ' + (e && e.message || e), 'danger'); }
       return;
@@ -441,7 +471,8 @@
   function exportFullReport() {
     if (!needOk()) return;
     var st = S();
-    run('التقرير الكامل', function () { Exporter.write(Exporter.buildFullReport(st, st.result, meta()), baseName() + '.xlsx'); }, function () { return Exporter.detailAoa(st, st.result); });
+    run('التقرير الكامل', function () { Exporter.write(Exporter.buildFullReport(st, st.result, meta()), baseName() + '.xlsx'); }, function () { return Exporter.detailAoa(st, st.result); },
+      { specs: function () { return Exporter.streamSpecs(st, st.result, meta()); }, filename: baseName() + '.xlsx' });
   }
   function exportPayroll() {
     if (!needOk()) return;
@@ -449,7 +480,7 @@
     run('كشف الصرف', function () { Exporter.write(Exporter.buildSelectedReport(st, st.result, meta(), ['payroll']), baseName('كشف الصرف') + '.xlsx'); }, function () {
       var rows = Reports.detailRows(st, st.result).filter(function (r) { return r.netPiastres > 0; });
       return [['م', 'الرقم الوظيفي', 'الاسم', 'القسم', 'الصافي']].concat(rows.map(function (r, i) { return [i + 1, r.code, r.name, r.dept, r.net]; }));
-    });
+    }, { specs: function () { return Exporter.streamSpecs(st, st.result, meta(), ['payroll']); }, filename: baseName('كشف الصرف') + '.xlsx' });
   }
   function viewColumns() {
     var st = S(), diff = Q.baselineDiff();
@@ -464,12 +495,20 @@
     var cols = viewColumns();
     run('العرض الحالي (' + Fmt.int(rows.length) + ' صف)', function () {
       Exporter.write(Exporter.buildViewExport({ rows: rows, columns: cols, filterLines: Q.activeFilterLines() }, meta()), baseName('عرض') + '.xlsx');
-    }, function () { return [cols.map(function (c) { return c.label; })].concat(rows.map(function (r) { return cols.map(function (c) { var v = c.get(r); return v == null ? '' : v; }); })); });
+    }, function () { return [cols.map(function (c) { return c.label; })].concat(rows.map(function (r) { return cols.map(function (c) { var v = c.get(r); return v == null ? '' : v; }); })); },
+    { filename: baseName('عرض') + '.xlsx', specs: function () {
+      var formats = {};
+      cols.forEach(function (c, i) { if (c.format) formats[i] = c.format; });
+      return [{ name: 'العرض الحالي', header: cols.map(function (c) { return c.label; }), count: rows.length, opts: { formats: formats },
+        rowAt: function (k) { var r = rows[k]; return cols.map(function (c) { var v = c.get(r); return v == null ? '' : v; }); } }];
+    } });
   }
   Q.exportCurrentView = exportCurrentView;
   function downloadTemplate(mode) {
     var st = S();
-    run(mode === 'blank' ? 'القالب الفارغ' : 'القالب', function () { Exporter.write(Exporter.buildTemplate(st, mode), Exporter.safeName('قالب ' + APP_NAME + ' - ' + Fmt.isoDate()) + '.xlsx'); }, function () { return Exporter.templateRows(st, mode); });
+    var tname = Exporter.safeName('قالب ' + APP_NAME + ' - ' + Fmt.isoDate()) + '.xlsx';
+    run(mode === 'blank' ? 'القالب الفارغ' : 'القالب', function () { Exporter.write(Exporter.buildTemplate(st, mode), tname); }, function () { return Exporter.templateRows(st, mode); },
+      { filename: tname, specs: function () { return [Exporter.streamAoaSpec('البيانات', Exporter.templateRows(st, mode), { formats: { 5: Exporter.FORMATS.INT, 6: Exporter.FORMATS.PCT, 7: Exporter.FORMATS.M4, 8: Exporter.FORMATS.M2 } })]; } });
   }
   Q.downloadTemplate = downloadTemplate;
 
@@ -557,9 +596,10 @@
 
   function customExport() {
     if (!needOk()) return;
-    if (!Exporter.available()) { UI.toast('محرك Excel غير محمّل', 'danger'); return; }
     var st = S();
-    if (tooBig()) { exportFullReport(); return; }
+    var big = tooBig() && Exporter.streamAvailable();
+    if (!big && !Exporter.available()) { UI.toast('محرك Excel غير محمّل', 'danger'); return; }
+    if (tooBig() && !big) { exportFullReport(); return; }
     var reg = Exporter.sheetRegistry(st);
     var unresolved = (st.result.unresolvedTierIds || []).length;
     var hints = {
@@ -591,6 +631,24 @@
     m.foot.appendChild(btn('إلغاء', { variant: 'ghost', onClick: m.close }));
     go = btn('تصدير', { variant: 'primary', icon: 'download', onClick: function () {
       var ks = keys();
+      if (big) {
+        m.close();
+        if (mode === 'single') runStream('التصدير المخصص', function () { return Exporter.streamSpecs(st, st.result, meta(), ks); }, baseName('مخصص') + '.xlsx');
+        else {
+          var chain = Promise.resolve();
+          ks.forEach(function (k) {
+            var d = reg.filter(function (x) { return x.key === k; })[0];
+            chain = chain.then(function () {
+              var specs = Exporter.streamSpecs(st, st.result, meta(), [k]);
+              if (!specs.length) return null;
+              return Exporter.writeStream(specs, baseName(d ? d.label : k) + '.xlsx', meta());
+            });
+          });
+          Busy.show('جارٍ كتابة ' + Fmt.int(ks.length) + ' ملف بالتدفق…');
+          chain.then(function () { Busy.hide(); UI.toast('تم تنزيل ' + Fmt.int(ks.length) + ' ورقة', 'ok'); }, function (e) { Busy.hide(); UI.toast('تعذّر إنشاء الملف: ' + (e && e.message || e), 'danger'); });
+        }
+        return;
+      }
       try {
         if (mode === 'single') {
           var wb = Exporter.buildSelectedReport(st, st.result, meta(), ks);
@@ -861,6 +919,7 @@
     paneHead(pane, 'العرض', 'تفضيلات الواجهة فقط — لا تؤثر على أي حساب أو تصدير.');
     pane.appendChild(settingRow('المظهر', 'فاتح أو داكن أو حسب النظام', UI.segmented({ value: Theme.get(), ariaLabel: 'المظهر', options: [{ value: 'system', label: 'النظام', icon: 'monitor' }, { value: 'light', label: 'فاتح', icon: 'sun' }, { value: 'dark', label: 'داكن', icon: 'moon' }], onChange: function (v) { Q.setTheme(v); } })));
     pane.appendChild(settingRow('كثافة الجداول', 'المضغوط يعرض صفوفًا أكثر', UI.segmented({ value: st.ui.density, ariaLabel: 'الكثافة', options: [{ value: 'normal', label: 'مريح' }, { value: 'compact', label: 'مضغوط' }], onChange: function (v) { st.ui.density = v; Q.scheduleSave(); Q.renderScreenIfMounted(); } })));
+    pane.appendChild(settingRow('عرض الصفوف', 'صفحات مرقّمة، أو تمرير متصل يعرض كل الصفوف حتى بالملايين', UI.segmented({ value: st.ui.viewMode, ariaLabel: 'عرض الصفوف', options: [{ value: 'pages', label: 'صفحات' }, { value: 'scroll', label: 'تمرير' }], onChange: function (v) { st.ui.viewMode = v; Q.scheduleSave(); Q.renderScreenIfMounted(); } })));
     pane.appendChild(settingRow('صفوف في الصفحة', null, UI.dropdown({ size: 'sm', align: 'end', value: String(st.ui.rowsPerPage), options: [25, 50, 100, 250, 500].map(function (n) { return { value: String(n), label: String(n) }; }), onChange: function (v) { st.ui.rowsPerPage = Number(v); Q.scheduleSave(); Q.renderScreenIfMounted(); } })));
     pane.appendChild(settingRow('الحركة', 'تقليلها يوقف الانتقالات والعدّادات المتحركة', UI.segmented({ value: st.ui.motion, ariaLabel: 'الحركة', options: [{ value: 'full', label: 'كاملة' }, { value: 'reduced', label: 'مخفّضة' }], onChange: function (v) { st.ui.motion = v; applyMotion(); Q.scheduleSave(); } })));
     pane.appendChild(settingRow('تأكيد الحذف الجماعي', 'اطلب تأكيدًا قبل حذف 5 صفوف أو أكثر', UI.toggle({ checked: st.ui.confirmDanger, ariaLabel: 'تأكيد الحذف', onChange: function (v) { st.ui.confirmDanger = v; Q.scheduleSave(); } })));
