@@ -1,10 +1,14 @@
-var VERSION = 'qisma-4.1.0';
+var VERSION = 'qisma-4.1.1';
 var CORE = [
   './',
   'index.html',
   'qisma.html',
   'manifest.webmanifest',
   'icons/icon.svg',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'icons/apple-touch-icon.png',
+  'favicon.ico',
   'css/qisma.css',
   'js/engine.js',
   'js/core.js',
